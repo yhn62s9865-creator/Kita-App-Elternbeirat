@@ -49,3 +49,27 @@ const STATUS_LABEL = {
   waitlist: 'Warteliste',
   home: 'bleibt zuhause',
 };
+
+// Lädt eine Datei (z. B. Excel) mit Zugangscode herunter.
+async function downloadFile(url, headers, fallbackName) {
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Fehler ${res.status}`);
+  }
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename\*=UTF-8''([^;]+)/);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(await res.blob());
+  a.download = m ? decodeURIComponent(m[1]) : fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+const KIND_LABEL = { event: 'Anmeldung', helper: 'Helferliste' };
+
+function listMeta(l) {
+  return [l.date && formatDate(l.date), l.time, l.location].filter(Boolean).map(esc).join(' · ');
+}

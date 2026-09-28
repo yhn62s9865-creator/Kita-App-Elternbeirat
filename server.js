@@ -1,13 +1,17 @@
 'use strict';
 
-// Kita-Notbetreuung: kleine Web-App ohne externe Abhängigkeiten.
-// Eltern melden ihr Kind an Engpass-Tagen an (braucht Betreuung) oder ab
-// (bleibt freiwillig zuhause). Kita-Leitung / Elternbeirat legt die Tage an.
+// Kita-App für Eltern und Elternbeirat, ohne externe Abhängigkeiten.
+// - Notbetreuung: Eltern melden ihr Kind an Engpass-Tagen an (braucht Betreuung)
+//   oder ab (bleibt freiwillig zuhause).
+// - Listen: Anmeldungen für Elternabende, Feste usw. und Helferlisten
+//   (z. B. „Kuchen backen“, „Aufbau 14–15 Uhr“).
+// Kita-Leitung / Elternbeirat legt beides an und lädt die Listen als Excel herunter.
 
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { buildXlsx } = require('./xlsx');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -21,10 +25,12 @@ const MIME = {
 // ---------- Speicher ----------
 
 function createStore(file) {
-  let data = { days: [], entries: [] };
+  let data = {};
   if (file && fs.existsSync(file)) {
     data = JSON.parse(fs.readFileSync(file, 'utf8'));
   }
+  // Ältere Datendateien kennen noch nicht alle Bereiche
+  for (const key of ['days', 'entries', 'lists', 'signups']) data[key] ||= [];
   return {
     data,
     save() {
@@ -95,6 +101,120 @@ function upcomingDays(data, now = new Date()) {
   return data.days.filter((d) => d.date >= today).sort((a, b) => a.date.localeCompare(b.date));
 }
 
+// ---------- Listen (Elternabend, Feste, Helfer) ----------
+
+const LIST_KINDS = { event: 'Anmeldung', helper: 'Helferliste' };
+
+function listSummary(data, list, now = new Date(), { admin = false } = {}) {
+  const signups = data.signups
+    .filter((s) => s.listId === list.id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const items = list.items.map((item) => {
+    const mine = signups.filter((s) => s.itemId === item.id);
+    const taken = mine.reduce((n, s) => n + s.persons, 0);
+    const out = { id: item.id, label: item.label, capacity: item.capacity, taken };
+    if (admin) out.signups = mine.map(publicSignup);
+    else if (list.showNames) out.names = mine.map((s) => s.name);
+    return out;
+  });
+  return {
+    id: list.id,
+    kind: list.kind,
+    title: list.title,
+    date: list.date,
+    time: list.time,
+    location: list.location,
+    description: list.description,
+    deadline: list.deadline,
+    showNames: list.showNames,
+    closed: list.closed || isPastDeadline(list, now),
+    ...(admin && { manuallyClosed: Boolean(list.closed) }),
+    items,
+  };
+}
+
+function publicSignup(s) {
+  return { id: s.id, listId: s.listId, itemId: s.itemId, name: s.name, persons: s.persons, comment: s.comment, createdAt: s.createdAt };
+}
+
+function sortLists(lists) {
+  // Listen mit Datum chronologisch, Listen ohne Datum ans Ende
+  return [...lists].sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || a.createdAt.localeCompare(b.createdAt));
+}
+
+// Zeilen wie „Kuchen backen | 8“ → { label: 'Kuchen backen', capacity: 8 }
+function parseItems(raw) {
+  const lines = Array.isArray(raw) ? raw : String(raw || '').split('\n');
+  return lines
+    .map((l) => (typeof l === 'string' ? l : `${l.label ?? ''}|${l.capacity ?? ''}`))
+    .map((l) => {
+      const [label, cap] = l.split('|');
+      const capacity = cap && cap.trim() ? Number(cap.trim()) : null;
+      return { label: cleanText(label, 100), capacity };
+    })
+    .filter((i) => i.label);
+}
+
+function validCapacity(c) {
+  return c === null || (Number.isInteger(c) && c > 0 && c <= 1000);
+}
+
+// ---------- Excel-Export ----------
+
+function deDate(iso) {
+  if (!iso) return '';
+  return new Date(iso + 'T12:00:00Z').toLocaleDateString('de-DE', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
+}
+
+function deDateTime(iso) {
+  return iso ? new Date(iso).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Europe/Berlin' }) : '';
+}
+
+const STATUS_DE = { confirmed: 'Platz bestätigt', waitlist: 'Warteliste', home: 'bleibt zuhause' };
+
+function dayWorkbook(data, day) {
+  const entries = entriesWithStatus(data, day);
+  const s = daySummary(data, day);
+  const rows = [
+    [`Notbetreuung ${deDate(day.date)}`],
+    [`${s.confirmed} von ${s.slots} Plätzen belegt · ${s.waitlist} auf der Warteliste · ${s.home} bleiben zuhause`],
+    [],
+    ['Nr.', 'Kind', 'Gruppe', 'Status', 'Eingetragen am'],
+    ...entries.map((e, i) => [i + 1, e.child, e.group, STATUS_DE[e.status], deDateTime(e.createdAt)]),
+  ];
+  return buildXlsx([{ name: `Notbetreuung ${day.date}`, rows, titleRows: 1, headerRow: 3 }]);
+}
+
+function listWorkbook(data, list) {
+  const summary = listSummary(data, list, new Date(), { admin: true });
+  const info = [list.date && deDate(list.date), list.time, list.location].filter(Boolean).join(' · ');
+  const intro = [[list.title], ...(info ? [[info]] : []), []];
+  const headerRow = intro.length;
+  let rows;
+  if (list.kind === 'event') {
+    const item = summary.items[0];
+    rows = [
+      ...intro,
+      ['Nr.', 'Name', 'Personen', 'Bemerkung', 'Eingetragen am'],
+      ...item.signups.map((s, i) => [i + 1, s.name, s.persons, s.comment, deDateTime(s.createdAt)]),
+      [],
+      ['', 'Summe', item.taken, item.capacity ? `von ${item.capacity} Plätzen` : ''],
+    ];
+  } else {
+    rows = [...intro, ['Aufgabe', 'Name', 'Bemerkung', 'Eingetragen am']];
+    for (const item of summary.items) {
+      const status = item.capacity ? `${item.taken}/${item.capacity}` : `${item.taken}`;
+      if (!item.signups.length) rows.push([`${item.label} (${status})`, '– noch offen –']);
+      item.signups.forEach((s) => rows.push([`${item.label} (${status})`, s.name, s.comment, deDateTime(s.createdAt)]));
+    }
+  }
+  return buildXlsx([{ name: list.title, rows, titleRows: 1, headerRow }]);
+}
+
+function fileName(s) {
+  return s.replace(/[^\wäöüÄÖÜß -]+/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'liste';
+}
+
 // ---------- HTTP ----------
 
 class HttpError extends Error {
@@ -102,6 +222,22 @@ class HttpError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+class FileResponse {
+  constructor(name, buffer) {
+    this.name = name;
+    this.buffer = buffer;
+  }
+}
+
+function sendXlsx(res, file) {
+  res.writeHead(200, {
+    'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'Content-Disposition': `attachment; filename="${file.name.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+    'Cache-Control': 'no-store',
+  });
+  res.end(file.buffer);
 }
 
 function send(res, status, body) {
@@ -157,6 +293,11 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
     if (!safeEqual(req.headers['x-admin-code'] || '', adminCode)) {
       throw new HttpError(401, 'Falscher Admin-Code');
     }
+  };
+  const findList = (listId) => {
+    const list = data.lists.find((l) => l.id === listId);
+    if (!list) throw new HttpError(404, 'Liste nicht gefunden');
+    return list;
   };
   const findDay = (dayId) => {
     const day = data.days.find((d) => d.id === dayId);
@@ -220,6 +361,59 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
       return { ok: true };
     }],
 
+    ['GET', /^\/api\/lists$/, (req) => {
+      requireParent(req);
+      const today = now().toISOString().slice(0, 10);
+      return sortLists(data.lists.filter((l) => !l.date || l.date >= today)).map((l) => listSummary(data, l, now()));
+    }],
+    ['POST', /^\/api\/lists\/([\w-]+)\/signups$/, async (req, [listId]) => {
+      requireParent(req);
+      const list = findList(listId);
+      if (list.closed || isPastDeadline(list, now())) throw new HttpError(409, 'Die Anmeldung für diese Liste ist geschlossen');
+      const body = await readJson(req);
+      const item = list.items.find((i) => i.id === body.itemId);
+      if (!item) throw new HttpError(400, 'Bitte eine Aufgabe auswählen');
+      const name = cleanText(body.name, 80);
+      if (!name) throw new HttpError(400, 'Bitte deinen Namen angeben');
+      const persons = list.kind === 'event' ? Number(body.persons ?? 1) : 1;
+      if (!Number.isInteger(persons) || persons < 1 || persons > 20) throw new HttpError(400, 'Anzahl Personen muss zwischen 1 und 20 liegen');
+      const existing = data.signups.filter((s) => s.itemId === item.id);
+      if (existing.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+        throw new HttpError(409, `${name} ist hier bereits eingetragen`);
+      }
+      const taken = existing.reduce((n, s) => n + s.persons, 0);
+      if (item.capacity && taken + persons > item.capacity) {
+        const left = item.capacity - taken;
+        throw new HttpError(409, left > 0 ? `Es sind nur noch ${left} Plätze frei` : 'Leider schon voll');
+      }
+      const signup = {
+        id: id(), listId: list.id, itemId: item.id, name, persons,
+        comment: cleanText(body.comment, 200), editToken: token(), createdAt: now().toISOString(),
+      };
+      data.signups.push(signup);
+      store.save();
+      return { signup: publicSignup(signup), editToken: signup.editToken };
+    }],
+    ['POST', /^\/api\/my-signups$/, async (req) => {
+      requireParent(req);
+      const body = await readJson(req);
+      const tokens = new Set(Array.isArray(body.tokens) ? body.tokens.slice(0, 200) : []);
+      return data.signups.filter((s) => tokens.has(s.editToken)).map((s) => ({ ...publicSignup(s), editToken: s.editToken }));
+    }],
+    ['DELETE', /^\/api\/signups\/([\w-]+)$/, (req, [signupId]) => {
+      requireParent(req);
+      const idx = data.signups.findIndex((s) => s.id === signupId);
+      if (idx === -1) throw new HttpError(404, 'Eintrag nicht gefunden');
+      if (!safeEqual(req.headers['x-edit-token'] || '', data.signups[idx].editToken)) {
+        throw new HttpError(403, 'Keine Berechtigung für diesen Eintrag');
+      }
+      const list = findList(data.signups[idx].listId);
+      if (list.closed || isPastDeadline(list, now())) throw new HttpError(409, 'Die Anmeldung für diese Liste ist geschlossen');
+      data.signups.splice(idx, 1);
+      store.save();
+      return { ok: true };
+    }],
+
     // --- Kita-Leitung / Elternbeirat ---
     ['POST', /^\/api\/admin\/login$/, (req) => {
       requireAdmin(req);
@@ -278,6 +472,81 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
       requireAdmin(req);
       return entriesWithStatus(data, findDay(dayId)).map(publicEntry);
     }],
+    ['GET', /^\/api\/admin\/days\/([\w-]+)\/excel$/, (req, [dayId]) => {
+      requireAdmin(req);
+      const day = findDay(dayId);
+      return new FileResponse(`Notbetreuung-${day.date}.xlsx`, dayWorkbook(data, day));
+    }],
+    ['GET', /^\/api\/admin\/lists$/, (req) => {
+      requireAdmin(req);
+      return sortLists(data.lists).reverse().map((l) => listSummary(data, l, now(), { admin: true }));
+    }],
+    ['POST', /^\/api\/admin\/lists$/, async (req) => {
+      requireAdmin(req);
+      const body = await readJson(req);
+      if (!LIST_KINDS[body.kind]) throw new HttpError(400, 'Ungültige Listenart');
+      const title = cleanText(body.title, 100);
+      if (!title) throw new HttpError(400, 'Bitte einen Titel angeben');
+      if (body.date && !isoDate(body.date)) throw new HttpError(400, 'Ungültiges Datum');
+      if (body.deadline && isNaN(Date.parse(body.deadline))) throw new HttpError(400, 'Ungültiger Anmeldeschluss');
+      let items;
+      if (body.kind === 'event') {
+        const capacity = body.capacity === undefined || body.capacity === null || body.capacity === '' ? null : Number(body.capacity);
+        items = [{ label: 'Teilnahme', capacity }];
+      } else {
+        items = parseItems(body.items);
+        if (!items.length) throw new HttpError(400, 'Bitte mindestens eine Aufgabe eintragen (eine pro Zeile)');
+        if (items.length > 100) throw new HttpError(400, 'Höchstens 100 Aufgaben pro Liste');
+      }
+      if (!items.every((i) => validCapacity(i.capacity))) throw new HttpError(400, 'Plätze müssen eine Zahl zwischen 1 und 1000 sein');
+      const list = {
+        id: id(),
+        kind: body.kind,
+        title,
+        date: body.date || null,
+        time: cleanText(body.time, 40),
+        location: cleanText(body.location, 100),
+        description: cleanText(body.description, 1000),
+        deadline: body.deadline ? new Date(body.deadline).toISOString() : null,
+        showNames: Boolean(body.showNames),
+        closed: false,
+        items: items.map((i) => ({ id: id(), ...i })),
+        createdAt: now().toISOString(),
+      };
+      data.lists.push(list);
+      store.save();
+      return listSummary(data, list, now(), { admin: true });
+    }],
+    ['PATCH', /^\/api\/admin\/lists\/([\w-]+)$/, async (req, [listId]) => {
+      requireAdmin(req);
+      const list = findList(listId);
+      const body = await readJson(req);
+      if (body.closed !== undefined) list.closed = Boolean(body.closed);
+      if (body.showNames !== undefined) list.showNames = Boolean(body.showNames);
+      store.save();
+      return listSummary(data, list, now(), { admin: true });
+    }],
+    ['DELETE', /^\/api\/admin\/lists\/([\w-]+)$/, (req, [listId]) => {
+      requireAdmin(req);
+      findList(listId);
+      data.lists = data.lists.filter((l) => l.id !== listId);
+      data.signups = data.signups.filter((s) => s.listId !== listId);
+      store.save();
+      return { ok: true };
+    }],
+    ['DELETE', /^\/api\/admin\/signups\/([\w-]+)$/, (req, [signupId]) => {
+      requireAdmin(req);
+      const before = data.signups.length;
+      data.signups = data.signups.filter((s) => s.id !== signupId);
+      if (data.signups.length === before) throw new HttpError(404, 'Eintrag nicht gefunden');
+      store.save();
+      return { ok: true };
+    }],
+    ['GET', /^\/api\/admin\/lists\/([\w-]+)\/excel$/, (req, [listId]) => {
+      requireAdmin(req);
+      const list = findList(listId);
+      return new FileResponse(`${fileName(list.title)}.xlsx`, listWorkbook(data, list));
+    }],
   ];
 
   return async function handler(req, res) {
@@ -286,7 +555,10 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
     try {
       for (const [method, re, fn] of routes) {
         const m = pathname.match(re);
-        if (m && req.method === method) return send(res, 200, await fn(req, m.slice(1)));
+        if (m && req.method === method) {
+          const result = await fn(req, m.slice(1));
+          return result instanceof FileResponse ? sendXlsx(res, result) : send(res, 200, result);
+        }
       }
       throw new HttpError(404, 'Unbekannte Adresse');
     } catch (err) {
@@ -297,7 +569,7 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
   };
 }
 
-module.exports = { createApp, entriesWithStatus };
+module.exports = { createApp, entriesWithStatus, parseItems };
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
@@ -310,6 +582,6 @@ if (require.main === module) {
     console.warn('Achtung: Standard-Codes aktiv. Für den echten Einsatz KITA_CODE und ADMIN_CODE setzen!');
   }
   http.createServer(handler).listen(port, () => {
-    console.log(`Kita-Notbetreuung läuft auf http://localhost:${port}  (Admin: /admin)`);
+    console.log(`Kita-App läuft auf http://localhost:${port}  (Verwaltung: /admin)`);
   });
 }

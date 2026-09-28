@@ -1,0 +1,13 @@
+# Start:  docker compose up -d
+# Die Codes unbedingt ändern! Die Daten liegen im Ordner ./daten
+services:
+  kita-app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      KITA_CODE: "hier-kita-code-eintragen"
+      ADMIN_CODE: "hier-langen-admin-code-eintragen"
+    volumes:
+      - ./daten:/data

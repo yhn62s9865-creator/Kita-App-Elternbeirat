@@ -87,3 +87,17 @@ button:disabled { opacity: 0.5; cursor: default; }
 table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
 th, td { text-align: left; padding: 6px 4px; border-top: 1px solid var(--line); }
 .hidden { display: none !important; }
+.tabs { display: flex; gap: 6px; margin-bottom: 14px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
+.tabs button { flex: 1; background: transparent; color: var(--text); padding: 8px; }
+.tabs button.active { background: var(--primary); color: var(--primary-text); }
+.tabs .count { display: inline-block; min-width: 1.4em; margin-left: 4px; padding: 0 5px; border-radius: 999px; background: var(--warn-bg); color: var(--warn); font-size: 0.8rem; }
+.kind { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--primary); font-weight: 600; }
+.desc { white-space: pre-line; margin: 8px 0; }
+.item { border-top: 1px solid var(--line); padding: 10px 0; }
+.item-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.item-head button { flex: 0 0 auto; padding: 6px 12px; }
+.names { font-size: 0.9rem; color: var(--muted); margin-top: 2px; }
+.signup-form { margin-top: 10px; padding: 10px; border-radius: 10px; background: var(--bg); }
+.checkbox { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.checkbox input { width: auto; }
+.small { font-size: 0.85rem; padding: 4px 10px; }

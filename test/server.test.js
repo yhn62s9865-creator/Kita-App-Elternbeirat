@@ -97,3 +97,87 @@ test('Geschlossene Tage und Anmeldeschluss', async (t) => {
   const list = await call('GET', `/api/admin/days/${day.body.id}/entries`, { headers: A });
   assert.deepStrictEqual(list.body.map((e) => e.child), ['Tom']);
 });
+
+
+test('Anmeldeliste (Elternabend) mit Personenzahl und Kapazität', async (t) => {
+  const { server, call } = await startServer();
+  t.after(() => server.close());
+
+  const list = await call('POST', '/api/admin/lists', {
+    headers: A,
+    body: { kind: 'event', title: 'Elternabend Herbst', date: '2099-10-15', time: '19:30 Uhr', capacity: 5 },
+  });
+  assert.strictEqual(list.status, 200);
+  const itemId = list.body.items[0].id;
+  const url = `/api/lists/${list.body.id}/signups`;
+
+  const a = await call('POST', url, { headers: P, body: { itemId, name: 'Familie Müller', persons: 2 } });
+  assert.strictEqual(a.status, 200);
+  assert.strictEqual((await call('POST', url, { headers: P, body: { itemId, name: 'familie müller', persons: 1 } })).status, 409);
+  const full = await call('POST', url, { headers: P, body: { itemId, name: 'Familie Kaya', persons: 4 } });
+  assert.strictEqual(full.status, 409);
+  assert.match(full.body.error, /nur noch 3/);
+  assert.strictEqual((await call('POST', url, { headers: P, body: { itemId, name: 'Familie Kaya', persons: 3 } })).status, 200);
+
+  const lists = (await call('GET', '/api/lists', { headers: P })).body;
+  assert.strictEqual(lists[0].items[0].taken, 5);
+  assert.strictEqual(lists[0].items[0].names, undefined); // Namen standardmäßig verborgen
+
+  const mine = await call('POST', '/api/my-signups', { headers: P, body: { tokens: [a.body.editToken] } });
+  assert.deepStrictEqual(mine.body.map((s) => s.name), ['Familie Müller']);
+  const del = await call('DELETE', `/api/signups/${a.body.signup.id}`, { headers: { ...P, 'X-Edit-Token': a.body.editToken } });
+  assert.strictEqual(del.status, 200);
+});
+
+test('Helferliste mit Aufgaben und sichtbaren Namen', async (t) => {
+  const { server, call } = await startServer();
+  t.after(() => server.close());
+
+  const list = await call('POST', '/api/admin/lists', {
+    headers: A,
+    body: { kind: 'helper', title: 'Sommerfest', showNames: true, items: 'Kuchen backen | 2\nAufbau 14–15 Uhr | 3\nGrillen' },
+  });
+  assert.deepStrictEqual(list.body.items.map((i) => [i.label, i.capacity]), [['Kuchen backen', 2], ['Aufbau 14–15 Uhr', 3], ['Grillen', null]]);
+  const [kuchen, , grillen] = list.body.items;
+  const url = `/api/lists/${list.body.id}/signups`;
+
+  await call('POST', url, { headers: P, body: { itemId: kuchen.id, name: 'Anna', comment: 'Marmorkuchen' } });
+  await call('POST', url, { headers: P, body: { itemId: kuchen.id, name: 'Ben', persons: 5 } }); // Personen zählen bei Helfern nicht
+  assert.strictEqual((await call('POST', url, { headers: P, body: { itemId: kuchen.id, name: 'Carl' } })).status, 409);
+  assert.strictEqual((await call('POST', url, { headers: P, body: { itemId: grillen.id, name: 'Carl' } })).status, 200);
+
+  const pub = (await call('GET', '/api/lists', { headers: P })).body[0];
+  assert.deepStrictEqual(pub.items[0].names, ['Anna', 'Ben']);
+  assert.strictEqual(pub.items[0].taken, 2);
+
+  assert.strictEqual((await call('POST', '/api/admin/lists', { headers: A, body: { kind: 'helper', title: 'Leer', items: '' } })).status, 400);
+  assert.strictEqual((await call('POST', '/api/admin/lists', { headers: P, body: { kind: 'event', title: 'X' } })).status, 401);
+});
+
+test('Excel-Download ist eine gültige .xlsx-Datei', async (t) => {
+  const { server } = await startServer();
+  t.after(() => server.close());
+  const base = `http://localhost:${server.address().port}`;
+  const post = (url, body) => fetch(base + url, { method: 'POST', headers: { ...A, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json());
+
+  const list = await post('/api/admin/lists', { kind: 'helper', title: 'Laternenfest <Helfer>', items: 'Punsch | 2' });
+  await fetch(`${base}/api/lists/${list.id}/signups`, {
+    method: 'POST', headers: { ...P, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ itemId: list.items[0].id, name: 'Jörg & Söhne' }),
+  });
+
+  assert.strictEqual((await fetch(`${base}/api/admin/lists/${list.id}/excel`, { headers: P })).status, 401);
+  const res = await fetch(`${base}/api/admin/lists/${list.id}/excel`, { headers: A });
+  assert.strictEqual(res.status, 200);
+  assert.match(res.headers.get('content-type'), /spreadsheetml/);
+  assert.match(res.headers.get('content-disposition'), /Laternenfest-Helfer\.xlsx/);
+  const buf = Buffer.from(await res.arrayBuffer());
+  assert.strictEqual(buf.subarray(0, 2).toString(), 'PK'); // ZIP-Signatur
+  const text = buf.toString('utf8');
+  assert.ok(text.includes('Jörg &amp; Söhne'));
+  assert.ok(text.includes('Laternenfest &lt;Helfer&gt;'));
+
+  const day = await post('/api/admin/days', { date: '2099-05-05', slots: 3 });
+  const dayRes = await fetch(`${base}/api/admin/days/${day.id}/excel`, { headers: A });
+  assert.strictEqual(dayRes.status, 200);
+});

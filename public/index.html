@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kita-Notbetreuung</title>
+  <title>Kita-App</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <main>
   <header>
     <div>
-      <h1>Kita-Notbetreuung</h1>
-      <div class="muted">An- und Abmeldung bei Personalengpässen</div>
+      <h1>Kita-App</h1>
+      <div class="muted">Termine, Helferlisten &amp; Notbetreuung</div>
     </div>
     <button id="logout" class="secondary hidden">Abmelden</button>
   </header>
@@ -29,14 +29,23 @@
 
   <section id="app" class="hidden">
     <div class="card">
-      <h2>Mein Kind</h2>
-      <p class="muted">Wird auf diesem Gerät gemerkt, damit du es nicht jedes Mal eintippen musst.</p>
+      <h2>Meine Angaben</h2>
+      <p class="muted">Werden nur auf diesem Gerät gemerkt, damit du sie nicht jedes Mal eintippen musst.</p>
+      <label for="name">Dein Name für Listen</label>
+      <input id="name" placeholder="z. B. Familie Müller oder Mias Mama">
       <div class="row">
-        <div><label for="child">Vorname (ggf. Initial)</label><input id="child" placeholder="z. B. Mia S."></div>
+        <div><label for="child">Kind (Vorname, ggf. Initial)</label><input id="child" placeholder="z. B. Mia S."></div>
         <div><label for="group">Gruppe</label><input id="group" placeholder="z. B. Bärengruppe"></div>
       </div>
     </div>
-    <div id="days"></div>
+
+    <nav class="tabs">
+      <button data-tab="lists" class="active">Termine &amp; Listen</button>
+      <button data-tab="care">Notbetreuung <span id="careCount" class="count hidden"></span></button>
+    </nav>
+
+    <div id="lists"></div>
+    <div id="days" class="hidden"></div>
   </section>
 </main>
 
@@ -45,12 +54,22 @@
   const $ = (s) => document.querySelector(s);
   let code = storageGet('kitaCode', '');
   let myTokens = storageGet('myTokens', []);
+  let openForm = null; // Aufgabe, bei der gerade das Eintragen-Formular offen ist
   const headers = () => ({ 'X-Kita-Code': code });
 
-  $('#child').value = storageGet('child', '');
-  $('#group').value = storageGet('group', '');
-  $('#child').addEventListener('input', (e) => storageSet('child', e.target.value));
-  $('#group').addEventListener('input', (e) => storageSet('group', e.target.value));
+  for (const f of ['name', 'child', 'group']) {
+    $('#' + f).value = storageGet(f, '');
+    $('#' + f).addEventListener('input', (e) => storageSet(f, e.target.value));
+  }
+
+  function selectTab(tab) {
+    storageSet('tab', tab);
+    document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+    $('#lists').classList.toggle('hidden', tab !== 'lists');
+    $('#days').classList.toggle('hidden', tab !== 'care');
+  }
+  document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+  selectTab(storageGet('tab', 'lists'));
 
   function show(loggedIn) {
     $('#login').classList.toggle('hidden', loggedIn);
@@ -78,33 +97,144 @@
   });
 
   async function load() {
-    let days, mine;
+    let days, lists, myEntries, mySignups;
     try {
-      [days, mine] = await Promise.all([
+      [days, lists, myEntries, mySignups] = await Promise.all([
         api('GET', '/api/days', undefined, headers()),
+        api('GET', '/api/lists', undefined, headers()),
         api('POST', '/api/my-entries', { tokens: myTokens }, headers()),
+        api('POST', '/api/my-signups', { tokens: myTokens }, headers()),
       ]);
     } catch (err) {
       if (/Code/.test(err.message)) { show(false); return; }
-      $('#days').innerHTML = `<div class="card error">${esc(err.message)}</div>`;
+      $('#lists').innerHTML = `<div class="card error">${esc(err.message)}</div>`;
       return;
     }
-    // Tokens von gelöschten Einträgen/Tagen aufräumen
-    myTokens = mine.map((e) => e.editToken);
+    // Tokens von gelöschten Einträgen aufräumen
+    myTokens = [...myEntries, ...mySignups].map((e) => e.editToken);
     storageSet('myTokens', myTokens);
 
-    if (!days.length) {
-      $('#days').innerHTML = '<div class="card"><h2>Alles gut 🎉</h2><p class="muted">Aktuell sind keine Engpass-Tage gemeldet. Die Betreuung läuft normal.</p></div>';
-      return;
-    }
-    $('#days').innerHTML = days.map((d) => dayCard(d, mine.filter((e) => e.dayId === d.id))).join('');
+    $('#careCount').textContent = days.length;
+    $('#careCount').classList.toggle('hidden', !days.length);
+
+    $('#lists').innerHTML = lists.length
+      ? lists.map((l) => listCard(l, mySignups.filter((s) => s.listId === l.id))).join('')
+      : '<div class="card"><h2>Gerade nichts los</h2><p class="muted">Aktuell gibt es keine Termine oder Listen zum Eintragen.</p></div>';
+
+    $('#days').innerHTML = days.length
+      ? days.map((d) => dayCard(d, myEntries.filter((e) => e.dayId === d.id))).join('')
+      : '<div class="card"><h2>Alles gut 🎉</h2><p class="muted">Aktuell sind keine Engpass-Tage gemeldet. Die Betreuung läuft normal.</p></div>';
   }
+
+  // ---------- Termine & Listen ----------
+
+  function listCard(l, mine) {
+    const status = l.closed ? 'Anmeldung geschlossen.' : l.deadline ? `Anmeldeschluss: ${esc(formatDateTime(l.deadline))}` : '';
+    return `
+      <div class="card">
+        <div class="kind">${KIND_LABEL[l.kind]}</div>
+        <h2>${esc(l.title)}</h2>
+        <div class="muted">${listMeta(l)}</div>
+        ${l.description ? `<div class="desc">${esc(l.description)}</div>` : ''}
+        ${l.kind === 'event' ? eventBody(l, mine) : l.items.map((i) => helperItem(l, i, mine.filter((s) => s.itemId === i.id))).join('')}
+        <div class="muted">${status}</div>
+        <div class="error" id="err-${l.id}"></div>
+      </div>`;
+  }
+
+  function mySignupRow(l, s) {
+    return `<li><span><strong>${esc(s.name)}</strong>${l.kind === 'event' ? ` · ${s.persons} ${s.persons === 1 ? 'Person' : 'Personen'}` : ''}${s.comment ? ` · ${esc(s.comment)}` : ''}
+      <span class="badge confirmed">eingetragen</span></span>
+      ${l.closed ? '' : `<button class="danger small" onclick="removeSignup('${s.id}','${s.editToken}')">Zurückziehen</button>`}</li>`;
+  }
+
+  function eventBody(l, mine) {
+    const item = l.items[0];
+    const full = item.capacity && item.taken >= item.capacity;
+    return `
+      <div class="stats">
+        <span class="badge confirmed">${item.taken}${item.capacity ? ` / ${item.capacity}` : ''} angemeldet</span>
+        ${full ? '<span class="badge waitlist">ausgebucht</span>' : ''}
+      </div>
+      ${item.names && item.names.length ? `<div class="names">Dabei: ${item.names.map(esc).join(', ')}</div>` : ''}
+      ${mine.length ? `<ul class="mine">${mine.map((s) => mySignupRow(l, s)).join('')}</ul>` : ''}
+      ${l.closed || full ? '' : `
+        <div class="signup-form">
+          <div class="row">
+            <div><label for="persons-${item.id}">Personen</label>
+              <select id="persons-${item.id}">${[1, 2, 3, 4, 5, 6].map((n) => `<option>${n}</option>`).join('')}</select></div>
+            <div><label for="comment-${item.id}">Bemerkung (optional)</label><input id="comment-${item.id}" maxlength="200"></div>
+          </div>
+          <div class="row"><button onclick="addSignup('${l.id}','${item.id}')">Anmelden</button></div>
+        </div>`}`;
+  }
+
+  function helperItem(l, item, mine) {
+    const full = item.capacity && item.taken >= item.capacity;
+    const canSign = !l.closed && !full;
+    return `
+      <div class="item">
+        <div class="item-head">
+          <div>
+            <strong>${esc(item.label)}</strong>
+            <span class="badge ${full ? 'confirmed' : 'waitlist'}">${item.capacity ? `${item.taken} / ${item.capacity}` : `${item.taken} dabei`}${full ? ' ✓' : ''}</span>
+            ${item.names && item.names.length ? `<div class="names">${item.names.map(esc).join(', ')}</div>` : ''}
+          </div>
+          ${canSign && openForm !== item.id ? `<button class="small" onclick="toggleForm('${item.id}')">Eintragen</button>` : ''}
+        </div>
+        ${mine.length ? `<ul class="mine">${mine.map((s) => mySignupRow(l, s)).join('')}</ul>` : ''}
+        ${canSign && openForm === item.id ? `
+          <div class="signup-form">
+            <label for="comment-${item.id}">Bemerkung (optional)</label>
+            <input id="comment-${item.id}" maxlength="200" placeholder="z. B. Apfelkuchen, glutenfrei">
+            <div class="row">
+              <button onclick="addSignup('${l.id}','${item.id}')">Eintragen</button>
+              <button class="secondary" onclick="toggleForm(null)">Abbrechen</button>
+            </div>
+          </div>` : ''}
+      </div>`;
+  }
+
+  function toggleForm(itemId) {
+    openForm = itemId;
+    load();
+  }
+
+  async function addSignup(listId, itemId) {
+    const name = $('#name').value.trim();
+    const errEl = $('#err-' + listId);
+    if (!name) { errEl.textContent = 'Bitte oben bei „Meine Angaben“ deinen Namen eintragen.'; $('#name').focus(); return; }
+    const persons = $('#persons-' + itemId) ? Number($('#persons-' + itemId).value) : 1;
+    const comment = $('#comment-' + itemId) ? $('#comment-' + itemId).value : '';
+    try {
+      const res = await api('POST', `/api/lists/${listId}/signups`, { itemId, name, persons, comment }, headers());
+      myTokens.push(res.editToken);
+      storageSet('myTokens', myTokens);
+      openForm = null;
+      load();
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
+  }
+
+  async function removeSignup(id, editToken) {
+    if (!confirm('Eintrag wirklich zurückziehen?')) return;
+    try {
+      await api('DELETE', `/api/signups/${id}`, undefined, { ...headers(), 'X-Edit-Token': editToken });
+    } catch (err) {
+      alert(err.message);
+    }
+    load();
+  }
+
+  // ---------- Notbetreuung ----------
 
   function dayCard(d, mine) {
     const free = Math.max(0, d.slots - d.confirmed);
     const pct = d.slots ? Math.min(100, Math.round((d.confirmed / d.slots) * 100)) : 100;
     return `
       <div class="card">
+        <div class="kind">Notbetreuung</div>
         <h2>${esc(formatDate(d.date))}</h2>
         ${d.note ? `<div class="note">${esc(d.note)}</div>` : ''}
         <div class="bar"><div style="width:${pct}%"></div></div>
@@ -120,7 +250,7 @@
           <li>
             <span><strong>${esc(e.child)}</strong>${e.group ? ` (${esc(e.group)})` : ''}
               <span class="badge ${e.status}">${STATUS_LABEL[e.status]}</span></span>
-            ${d.closed ? '' : `<button class="danger" onclick="removeEntry('${e.id}','${e.editToken}')">Zurückziehen</button>`}
+            ${d.closed ? '' : `<button class="danger small" onclick="removeEntry('${e.id}','${e.editToken}')">Zurückziehen</button>`}
           </li>`).join('')}</ul>` : ''}
         ${d.closed ? '' : `
           <div class="row">
@@ -135,7 +265,7 @@
     const child = $('#child').value.trim();
     const group = $('#group').value.trim();
     const errEl = $('#err-' + dayId);
-    if (!child) { errEl.textContent = 'Bitte oben den Namen des Kindes eintragen.'; $('#child').focus(); return; }
+    if (!child) { errEl.textContent = 'Bitte oben bei „Meine Angaben“ den Namen des Kindes eintragen.'; $('#child').focus(); return; }
     try {
       const res = await api('POST', `/api/days/${dayId}/entries`, { child, group, type }, headers());
       myTokens.push(res.editToken);
@@ -157,7 +287,11 @@
   }
 
   if (code) { show(true); load(); } else { show(false); }
-  setInterval(() => { if (code && !document.hidden) load(); }, 30000);
+  // Regelmäßig aktualisieren – aber nicht, während jemand gerade etwas eintippt
+  setInterval(() => {
+    const typing = document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName);
+    if (code && !document.hidden && !typing && !openForm) load();
+  }, 30000);
 </script>
 </body>
 </html>

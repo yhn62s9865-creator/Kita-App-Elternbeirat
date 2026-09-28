@@ -1,56 +1,100 @@
-# Kita-Notbetreuung
+# Kita-App für Eltern und Elternbeirat
 
-Kleine Web-App für Kita und Elternbeirat: Wenn wegen Krankheit oder Personalmangel
-nicht genug Erzieherinnen da sind, meldet die Kita-Leitung einen **Engpass-Tag** mit einer
-begrenzten Zahl an Plätzen. Eltern können dann per Handy
+Kleine Web-App, die im Handy-Browser läuft, ganz ohne App-Store:
 
-- ihr Kind **anmelden** („Brauche Betreuung“) – wer zuerst kommt, bekommt einen Platz,
-  alle weiteren landen auf der **Warteliste** und rücken bei Absagen automatisch nach, oder
-- ihr Kind **abmelden** („Kind bleibt zuhause“) – damit die Kita weiß, wer freiwillig
-  zuhause bleibt.
+- **Termine & Listen:** Anmeldungen für Elternabende, Feste und Ausflüge sowie
+  **Helferlisten** („Kuchen backen | 8“, „Aufbau 14–15 Uhr | 4“, …).
+- **Notbetreuung:** Wenn wegen Krankheit oder Personalmangel nicht genug Erzieherinnen da
+  sind, meldet die Kita-Leitung einen **Engpass-Tag** mit einer begrenzten Zahl an Plätzen.
+  Eltern melden ihr Kind an („Brauche Betreuung“, bei vollen Plätzen auf die **Warteliste**
+  mit automatischem Nachrücken) oder ab („Kind bleibt zuhause“).
+- **Excel:** Jede Liste lässt sich per Knopfdruck als **echte Excel-Datei (.xlsx)**
+  herunterladen, mit Überschrift, fetter Kopfzeile und Filter. Sie ist so eingestellt,
+  dass sie beim Drucken auf die Seitenbreite passt, zum Beispiel zum Aushängen.
 
 ## So funktioniert's
 
 | Wer | Adresse | Zugang |
 |---|---|---|
-| Eltern | `/` | gemeinsamer **Kita-Code** (z. B. per Elternbrief/WhatsApp-Gruppe verteilt) |
+| Eltern | `/` | gemeinsamer **Kita-Code** (z. B. per Elternbrief verteilt) |
 | Kita-Leitung / Elternbeirat | `/admin` | separater **Admin-Code** |
 
-**Verwaltung:** Engpass-Tag anlegen (Datum, Plätze, optional Anmeldeschluss und Hinweis),
-Plätze nachträglich ändern, Anmeldung schließen, Liste als CSV für Excel exportieren.
+**Verwaltung:**
+- Listen anlegen: Titel, Datum, Uhrzeit, Ort, Beschreibung, Anmeldeschluss.
+  - *Anmeldung zu einem Termin:* Eltern tragen sich mit Personenzahl ein, optional mit
+    einer Höchstzahl.
+  - *Helferliste:* eine Aufgabe pro Zeile, die gewünschte Helferzahl nach einem `|`.
+  - Pro Liste lässt sich einstellen, ob Eltern sehen dürfen, **wer** sich eingetragen hat.
+    Standardmäßig sehen sie nur die Zahlen.
+- Engpass-Tage anlegen, Plätze ändern, Anmeldung schließen.
+- Einträge löschen, Excel-Liste herunterladen.
 
-**Eltern:** sehen nur die Zahlen (belegt / Warteliste / zuhause) und ihre eigenen Einträge,
-**nicht** die Namen anderer Kinder. Einträge können bis zum Anmeldeschluss zurückgezogen
-werden. Das Gerät merkt sich Kita-Code und Namen des Kindes.
+**Eltern:** tragen einmal ihren Namen bzw. den Namen des Kindes ein (wird nur auf dem
+eigenen Handy gemerkt), tragen sich mit einem Klick ein und können sich bis zum
+Anmeldeschluss wieder austragen.
 
-## Starten
+## Auf einem eigenen Server betreiben (z. B. Kita- oder Träger-Server)
 
-Benötigt nur [Node.js](https://nodejs.org) ab Version 20 – keine weiteren Pakete.
+Das geht gut: Die App ist ein einziges kleines Programm und speichert alles in **einer
+Datei** (`data.json`). Sie braucht keine Datenbank und schickt keine Daten an fremde Dienste.
+
+### Variante A: mit Docker (empfohlen, z. B. auf einer Synology-/QNAP-NAS)
+
+1. Projektordner auf den Server kopieren.
+2. In `docker-compose.yml` die beiden Codes ändern.
+3. `docker compose up -d` ausführen (auf einer Synology NAS geht das auch über den
+   „Container Manager“ → Projekt erstellen).
+4. Die Daten liegen im Ordner `daten/`. **Diesen Ordner regelmäßig sichern.**
+
+### Variante B: direkt mit Node.js
+
+Benötigt [Node.js](https://nodejs.org) ab Version 20, keine weiteren Pakete.
 
 ```bash
-KITA_CODE=sonnenschein ADMIN_CODE=geheim-4711 npm start
-# → http://localhost:3000  bzw.  http://localhost:3000/admin
+KITA_CODE=sonnenschein ADMIN_CODE=ein-langer-geheimer-code npm start
+# → http://<server>:3000  bzw.  http://<server>:3000/admin
 ```
 
 Ohne Umgebungsvariablen gelten die Test-Codes `kita` und `leitung`.
-Die Daten landen in `data.json` (Pfad änderbar über `DATA_FILE`, Port über `PORT`).
+Weitere Einstellungen: `PORT` (Standard 3000) und `DATA_FILE` (Pfad zur Datendatei).
 
-Tests: `npm test`
+### Wichtig: Erreichbarkeit von zuhause
 
-## Datenschutz (DSGVO) – bitte vor dem Echtbetrieb klären
+Läuft die App nur im Kita-Netz, kommen Eltern von zuhause oder unterwegs **nicht** heran.
+Dafür braucht der Server:
 
-- Es werden nur **Vorname/Initial und Gruppe** gespeichert – keine E-Mail, Telefonnummer o. ä.
-- Hosting möglichst bei einem Anbieter in der EU, Verbindung nur über **HTTPS**.
-- Den Einsatz mit Kita-Leitung und **Träger** abstimmen; ggf. kurze Datenschutzinfo für Eltern.
-- Alte Engpass-Tage regelmäßig in der Verwaltung löschen.
+1. eine **Adresse im Internet**, also eine (Sub-)Domain oder DynDNS, z. B.
+   `eltern.kita-sonnenschein.de`, und eine Portfreigabe im Router,
+2. **HTTPS** (Verschlüsselung). Auf einer Synology richtet man das über „Reverse Proxy“
+   und ein kostenloses Let's-Encrypt-Zertifikat ein, sonst z. B. mit Caddy oder nginx.
+
+Das am besten mit der IT des Trägers absprechen. Oft verwaltet sie das Kita-Netz und hat
+schon einen passenden Server. Ist das zu aufwendig, ist ein kleiner gemieteter Server bei
+einem deutschen Anbieter die Alternative. Die App läuft dort genauso.
+
+## Datenschutz (DSGVO)
+
+- Gespeichert werden nur die Namen, die Eltern selbst eintragen (z. B. „Familie Müller“,
+  „Mia S.“), Gruppe, Personenzahl und eine freiwillige Bemerkung. Keine E-Mail-Adressen,
+  keine Telefonnummern, keine Tracking- oder Analysedienste.
+- Eltern sehen standardmäßig nur Zahlen, keine fremden Namen.
+- Betrieb auf eigenem Server bzw. in Deutschland, Verbindung nur über **HTTPS**.
+- Einsatz mit Kita-Leitung und **Träger** abstimmen; kurze Datenschutzinfo für Eltern
+  bereitstellen (was wird gespeichert, wer sieht es, wann wird gelöscht).
+- Alte Listen und Engpass-Tage regelmäßig in der Verwaltung löschen.
+
+## Entwicklung
+
+```bash
+npm test     # automatische Tests
+npm start    # startet die App auf http://localhost:3000
+```
 
 ## Ideen für die nächsten Ausbaustufen
 
-1. **Benachrichtigungen**, sobald ein Engpass-Tag gemeldet wird (Web-Push, E-Mail oder
-   Link in die bestehende Eltern-WhatsApp-/Signal-Gruppe).
-2. **Priorisierung** statt „wer zuerst kommt“: z. B. Kennzeichnung „beide Eltern berufstätig /
-   systemrelevant“, damit die Kita nach ihren Kriterien Plätze vergeben kann.
-3. **Plätze pro Gruppe** statt für die ganze Kita.
-4. **Eltern-Konten** statt gemeinsamem Code (z. B. Einladungslink pro Familie).
+1. **Benachrichtigungen** bei neuen Listen oder Engpass-Tagen (Web-Push oder E-Mail).
+2. **Priorisierung** in der Notbetreuung (z. B. „beide Eltern berufstätig“) statt
+   „wer zuerst kommt“.
+3. **Plätze pro Gruppe** in der Notbetreuung.
+4. **Automatisches Löschen** alter Listen nach X Wochen.
 5. Als **App installierbar** machen (PWA: „Zum Startbildschirm hinzufügen“).
-6. **Hosting**: z. B. kleiner Server/VPS in Deutschland, Render/Fly.io (EU-Region) o. Ä.

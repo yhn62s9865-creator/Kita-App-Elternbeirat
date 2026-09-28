@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kita-Notbetreuung – Verwaltung</title>
+  <title>Kita-App – Verwaltung</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -26,20 +26,64 @@
   </section>
 
   <section id="app" class="hidden">
-    <form id="newDay" class="card">
-      <h2>Engpass-Tag melden</h2>
-      <div class="row">
-        <div><label for="date">Datum</label><input id="date" type="date" required></div>
-        <div><label for="slots">Verfügbare Plätze</label><input id="slots" type="number" min="0" max="500" required></div>
-      </div>
-      <label for="deadline">Anmeldeschluss (optional)</label>
-      <input id="deadline" type="datetime-local">
-      <label for="note">Hinweis an die Eltern (optional)</label>
-      <textarea id="note" rows="2" placeholder="z. B. Wegen Krankheit sind nur 3 Erzieherinnen da. Bitte nur anmelden, wenn es wirklich nicht anders geht."></textarea>
-      <div class="row"><button type="submit">Tag anlegen</button></div>
-      <div class="error" id="newDayError"></div>
-    </form>
-    <div id="days"></div>
+    <nav class="tabs">
+      <button data-tab="lists" class="active">Termine &amp; Listen</button>
+      <button data-tab="care">Notbetreuung</button>
+    </nav>
+
+    <div id="tab-lists">
+      <form id="newList" class="card">
+        <h2>Neue Liste anlegen</h2>
+        <label for="kind">Art der Liste</label>
+        <select id="kind">
+          <option value="event">Anmeldung zu einem Termin (Elternabend, Fest, Ausflug …)</option>
+          <option value="helper">Helferliste mit Aufgaben (Kuchen, Aufbau, Grillen …)</option>
+        </select>
+        <label for="title">Titel</label>
+        <input id="title" required maxlength="100" placeholder="z. B. Sommerfest 2027">
+        <div class="row">
+          <div><label for="lDate">Datum (optional)</label><input id="lDate" type="date"></div>
+          <div><label for="lTime">Uhrzeit (optional)</label><input id="lTime" maxlength="40" placeholder="z. B. 15–18 Uhr"></div>
+        </div>
+        <label for="lLocation">Ort (optional)</label>
+        <input id="lLocation" maxlength="100" placeholder="z. B. Kita-Garten">
+        <label for="lDesc">Beschreibung (optional)</label>
+        <textarea id="lDesc" rows="2" maxlength="1000"></textarea>
+
+        <div id="eventFields">
+          <label for="lCapacity">Maximale Teilnehmerzahl (leer = unbegrenzt)</label>
+          <input id="lCapacity" type="number" min="1" max="1000">
+        </div>
+        <div id="helperFields" class="hidden">
+          <label for="lItems">Aufgaben – eine pro Zeile, Anzahl Helfer nach einem „|“</label>
+          <textarea id="lItems" rows="5" placeholder="Kuchen backen | 8&#10;Aufbau 14–15 Uhr | 4&#10;Grillen 15–17 Uhr | 2&#10;Abbau"></textarea>
+        </div>
+
+        <label for="lDeadline">Anmeldeschluss (optional)</label>
+        <input id="lDeadline" type="datetime-local">
+        <label class="checkbox"><input id="lShowNames" type="checkbox"> Eltern dürfen sehen, wer sich eingetragen hat</label>
+        <div class="row"><button type="submit">Liste anlegen</button></div>
+        <div class="error" id="newListError"></div>
+      </form>
+      <div id="lists"></div>
+    </div>
+
+    <div id="tab-care" class="hidden">
+      <form id="newDay" class="card">
+        <h2>Engpass-Tag melden</h2>
+        <div class="row">
+          <div><label for="date">Datum</label><input id="date" type="date" required></div>
+          <div><label for="slots">Verfügbare Plätze</label><input id="slots" type="number" min="0" max="500" required></div>
+        </div>
+        <label for="deadline">Anmeldeschluss (optional)</label>
+        <input id="deadline" type="datetime-local">
+        <label for="note">Hinweis an die Eltern (optional)</label>
+        <textarea id="note" rows="2" placeholder="z. B. Wegen Krankheit sind nur 3 Erzieherinnen da. Bitte nur anmelden, wenn es wirklich nicht anders geht."></textarea>
+        <div class="row"><button type="submit">Tag anlegen</button></div>
+        <div class="error" id="newDayError"></div>
+      </form>
+      <div id="days"></div>
+    </div>
   </section>
 </main>
 
@@ -48,7 +92,15 @@
   const $ = (s) => document.querySelector(s);
   let code = storageGet('adminCode', '');
   const headers = () => ({ 'X-Admin-Code': code });
-  let loaded = {};
+
+  function selectTab(tab) {
+    storageSet('adminTab', tab);
+    document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+    $('#tab-lists').classList.toggle('hidden', tab !== 'lists');
+    $('#tab-care').classList.toggle('hidden', tab !== 'care');
+  }
+  document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => selectTab(b.dataset.tab)));
+  selectTab(storageGet('adminTab', 'lists'));
 
   function show(loggedIn) {
     $('#login').classList.toggle('hidden', loggedIn);
@@ -71,6 +123,80 @@
 
   $('#logout').addEventListener('click', () => { storageSet('adminCode', ''); code = ''; show(false); });
 
+  const toIso = (v) => (v ? new Date(v).toISOString() : null);
+
+  // ---------- Listen ----------
+
+  $('#kind').addEventListener('change', (e) => {
+    $('#eventFields').classList.toggle('hidden', e.target.value !== 'event');
+    $('#helperFields').classList.toggle('hidden', e.target.value !== 'helper');
+  });
+
+  $('#newList').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#newListError').textContent = '';
+    try {
+      await api('POST', '/api/admin/lists', {
+        kind: $('#kind').value,
+        title: $('#title').value,
+        date: $('#lDate').value || null,
+        time: $('#lTime').value,
+        location: $('#lLocation').value,
+        description: $('#lDesc').value,
+        capacity: $('#lCapacity').value || null,
+        items: $('#lItems').value,
+        deadline: toIso($('#lDeadline').value),
+        showNames: $('#lShowNames').checked,
+      }, headers());
+      e.target.reset();
+      $('#kind').dispatchEvent(new Event('change'));
+      load();
+    } catch (err) {
+      $('#newListError').textContent = err.message;
+    }
+  });
+
+  function listCard(l) {
+    const total = l.items.reduce((n, i) => n + i.taken, 0);
+    const rows = l.kind === 'event'
+      ? l.items[0].signups.map((s, n) => `<tr><td>${n + 1}</td><td>${esc(s.name)}</td><td>${s.persons}</td><td>${esc(s.comment)}</td>
+          <td><button class="danger small" onclick="removeSignup('${s.id}')" title="Eintrag löschen">✕</button></td></tr>`).join('')
+      : l.items.map((i) => `
+          <tr><td colspan="4"><strong>${esc(i.label)}</strong> <span class="badge ${i.capacity && i.taken >= i.capacity ? 'confirmed' : 'waitlist'}">${i.taken}${i.capacity ? ` / ${i.capacity}` : ''}</span></td></tr>
+          ${i.signups.map((s) => `<tr><td></td><td>${esc(s.name)}</td><td>${esc(s.comment)}</td>
+            <td><button class="danger small" onclick="removeSignup('${s.id}')" title="Eintrag löschen">✕</button></td></tr>`).join('')}`).join('');
+    const head = l.kind === 'event'
+      ? '<tr><th>#</th><th>Name</th><th>Pers.</th><th>Bemerkung</th><th></th></tr>'
+      : '<tr><th></th><th>Name</th><th>Bemerkung</th><th></th></tr>';
+    return `
+      <div class="card">
+        <div class="kind">${KIND_LABEL[l.kind]}</div>
+        <h2>${esc(l.title)}</h2>
+        <div class="muted">${listMeta(l)}</div>
+        ${l.description ? `<div class="desc">${esc(l.description)}</div>` : ''}
+        <div class="stats">
+          <span class="badge confirmed">${l.kind === 'event' ? `${total}${l.items[0].capacity ? ` / ${l.items[0].capacity}` : ''} Personen angemeldet` : `${total} Helfer eingetragen`}</span>
+          <span class="badge home">${l.showNames ? 'Namen für Eltern sichtbar' : 'Namen nur hier sichtbar'}</span>
+        </div>
+        <div class="muted">${l.closed ? 'Anmeldung geschlossen' : 'Anmeldung offen'}${l.deadline ? ` · Schluss ${esc(formatDateTime(l.deadline))}` : ''}</div>
+        ${total || l.kind === 'helper' ? `<table><thead>${head}</thead><tbody>${rows}</tbody></table>` : '<p class="muted">Noch keine Anmeldungen.</p>'}
+        <div class="row">
+          <button onclick="excel('lists','${l.id}')">⬇ Excel-Liste</button>
+          <button class="secondary" onclick="patch('lists','${l.id}',{closed:${!l.manuallyClosed}})">${l.manuallyClosed ? 'Wieder öffnen' : 'Anmeldung schließen'}</button>
+          <button class="secondary" onclick="patch('lists','${l.id}',{showNames:${!l.showNames}})">${l.showNames ? 'Namen verbergen' : 'Namen zeigen'}</button>
+          <button class="danger" onclick="remove('lists','${l.id}','Liste inklusive aller Einträge löschen?')">Löschen</button>
+        </div>
+      </div>`;
+  }
+
+  async function removeSignup(id) {
+    if (!confirm('Diesen Eintrag löschen?')) return;
+    try { await api('DELETE', `/api/admin/signups/${id}`, undefined, headers()); } catch (err) { alert(err.message); }
+    load();
+  }
+
+  // ---------- Notbetreuung ----------
+
   $('#newDay').addEventListener('submit', async (e) => {
     e.preventDefault();
     $('#newDayError').textContent = '';
@@ -78,7 +204,7 @@
       await api('POST', '/api/admin/days', {
         date: $('#date').value,
         slots: Number($('#slots').value),
-        deadline: $('#deadline').value ? new Date($('#deadline').value).toISOString() : null,
+        deadline: toIso($('#deadline').value),
         note: $('#note').value,
       }, headers());
       e.target.reset();
@@ -88,24 +214,10 @@
     }
   });
 
-  async function load() {
-    let days;
-    try {
-      days = await api('GET', '/api/admin/days', undefined, headers());
-    } catch (err) {
-      show(false);
-      return;
-    }
-    const lists = await Promise.all(days.map((d) => api('GET', `/api/admin/days/${d.id}/entries`, undefined, headers())));
-    loaded = Object.fromEntries(days.map((d, i) => [d.id, { date: d.date, entries: lists[i] }]));
-    $('#days').innerHTML = days.length
-      ? days.map((d, i) => dayCard(d, lists[i])).join('')
-      : '<div class="card muted">Noch keine Engpass-Tage angelegt.</div>';
-  }
-
   function dayCard(d, entries) {
     return `
       <div class="card">
+        <div class="kind">Notbetreuung</div>
         <h2>${esc(formatDate(d.date))}</h2>
         ${d.note ? `<div class="note">${esc(d.note)}</div>` : ''}
         <div class="stats">
@@ -123,45 +235,61 @@
             </tbody>
           </table>` : '<p class="muted">Noch keine Rückmeldungen.</p>'}
         <div class="row">
+          <button onclick="excel('days','${d.id}')">⬇ Excel-Liste</button>
           <button class="secondary" onclick="changeSlots('${d.id}', ${d.slots})">Plätze ändern</button>
-          <button class="secondary" onclick="toggleClosed('${d.id}', ${d.manuallyClosed})">${d.manuallyClosed ? 'Wieder öffnen' : 'Anmeldung schließen'}</button>
-          <button class="secondary" onclick="exportCsv('${d.id}')">CSV-Liste</button>
-          <button class="danger" onclick="deleteDay('${d.id}')">Löschen</button>
+          <button class="secondary" onclick="patch('days','${d.id}',{closed:${!d.manuallyClosed}})">${d.manuallyClosed ? 'Wieder öffnen' : 'Anmeldung schließen'}</button>
+          <button class="danger" onclick="remove('days','${d.id}','Tag inklusive aller Rückmeldungen löschen?')">Löschen</button>
         </div>
       </div>`;
   }
 
   async function changeSlots(id, current) {
     const v = prompt('Wie viele Plätze gibt es?', current);
-    if (v === null) return;
-    try { await api('PATCH', `/api/admin/days/${id}`, { slots: Number(v) }, headers()); } catch (err) { alert(err.message); }
+    if (v !== null) patch('days', id, { slots: Number(v) });
+  }
+
+  // ---------- Gemeinsam ----------
+
+  async function patch(kind, id, body) {
+    try { await api('PATCH', `/api/admin/${kind}/${id}`, body, headers()); } catch (err) { alert(err.message); }
     load();
   }
 
-  async function toggleClosed(id, closed) {
-    try { await api('PATCH', `/api/admin/days/${id}`, { closed: !closed }, headers()); } catch (err) { alert(err.message); }
+  async function remove(kind, id, question) {
+    if (!confirm(question)) return;
+    try { await api('DELETE', `/api/admin/${kind}/${id}`, undefined, headers()); } catch (err) { alert(err.message); }
     load();
   }
 
-  async function deleteDay(id) {
-    if (!confirm('Tag inklusive aller Rückmeldungen löschen?')) return;
-    try { await api('DELETE', `/api/admin/days/${id}`, undefined, headers()); } catch (err) { alert(err.message); }
-    load();
+  async function excel(kind, id) {
+    try { await downloadFile(`/api/admin/${kind}/${id}/excel`, headers(), 'liste.xlsx'); } catch (err) { alert(err.message); }
   }
 
-  function exportCsv(id) {
-    const { date, entries } = loaded[id];
-    const q = (s) => `"${String(s).replace(/"/g, '""')}"`;
-    const rows = [['Nr', 'Kind', 'Gruppe', 'Status'], ...entries.map((e, i) => [i + 1, e.child, e.group, STATUS_LABEL[e.status]])];
-    const blob = new Blob(['﻿' + rows.map((r) => r.map(q).join(';')).join('\n')], { type: 'text/csv' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `notbetreuung-${date}.csv`;
-    a.click();
+  async function load() {
+    let days, lists;
+    try {
+      [days, lists] = await Promise.all([
+        api('GET', '/api/admin/days', undefined, headers()),
+        api('GET', '/api/admin/lists', undefined, headers()),
+      ]);
+    } catch (err) {
+      show(false);
+      return;
+    }
+    const entries = await Promise.all(days.map((d) => api('GET', `/api/admin/days/${d.id}/entries`, undefined, headers())));
+    $('#lists').innerHTML = lists.length
+      ? lists.map(listCard).join('')
+      : '<div class="card muted">Noch keine Listen angelegt.</div>';
+    $('#days').innerHTML = days.length
+      ? days.map((d, i) => dayCard(d, entries[i])).join('')
+      : '<div class="card muted">Noch keine Engpass-Tage angelegt.</div>';
   }
 
   if (code) { show(true); load(); } else { show(false); }
-  setInterval(() => { if (code && !document.hidden) load(); }, 30000);
+  setInterval(() => {
+    const typing = document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName);
+    if (code && !document.hidden && !typing) load();
+  }, 30000);
 </script>
 </body>
 </html>
