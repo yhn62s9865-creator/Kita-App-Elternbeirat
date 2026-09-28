@@ -46,6 +46,9 @@ rm -rf "$APP_DIR/public"
 cp "$SRC_DIR/server.js" "$SRC_DIR/xlsx.js" "$SRC_DIR/package.json" "$APP_DIR/"
 cp -r "$SRC_DIR/public" "$APP_DIR/"
 chown -R root:root "$APP_DIR"
+# Beim Hochladen (z. B. von Windows per scp) sind Ordner oft nur für root lesbar –
+# die App läuft aber als eigener Benutzer und muss ihre Dateien lesen können.
+chmod -R u=rwX,go=rX "$APP_DIR"
 chown -R kita-app:kita-app "$DATA_DIR"
 chmod 750 "$DATA_DIR" "$DATA_DIR/backups"
 
@@ -154,14 +157,18 @@ systemctl restart $SERVICE
 
 # ---------- 6. Prüfen ----------
 say "Prüfe, ob die App läuft …"
-ok=""
+status=""
 for _ in $(seq 1 15); do
-  if curl -fsS -o /dev/null http://127.0.0.1:3000/ 2>/dev/null; then ok=1; break; fi
+  status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ 2>/dev/null || true)"
+  [ "$status" = 200 ] && break
   sleep 1
 done
-if [ -z "$ok" ]; then
+if [ "$status" != 200 ]; then
   journalctl -u $SERVICE -n 20 --no-pager || true
-  fail "Die App ist nicht gestartet. Die Meldungen oben zeigen den Grund."
+  if [ "$status" = 000 ] || [ -z "$status" ]; then
+    fail "Die App ist nicht erreichbar. Die Meldungen oben zeigen den Grund."
+  fi
+  fail "Die App läuft, liefert aber die Startseite nicht aus (HTTP $status). Bitte ein Foto dieser Meldung schicken."
 fi
 
 # Beim Server-Skript (deploy/server/install.sh) folgt dessen eigene Zusammenfassung
