@@ -691,7 +691,8 @@ if (require.main === module) {
   if (problems.length) {
     console.warn('Achtung (nur zum Testen in Ordnung):\n- ' + problems.join('\n- '));
   }
-  http.createServer(handler).listen(port, () => {
+  // HOST=127.0.0.1: nur für den Reverse Proxy auf demselben Rechner erreichbar (Server-Betrieb)
+  http.createServer(handler).listen(port, process.env.HOST || undefined, () => {
     console.log(`Kita-App läuft auf http://localhost:${port}  (Verwaltung: /admin)`);
   });
 }

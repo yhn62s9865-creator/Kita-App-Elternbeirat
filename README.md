@@ -39,6 +39,9 @@ Das geht gut: Die App ist ein einziges kleines Programm und speichert alles in *
 Datei** (`data.json`). Sie braucht keine Datenbank und schickt keine Daten an fremde Dienste.
 
 👉 **Schritt-für-Schritt-Anleitungen (inkl. Erreichbarkeit von außen):**
+- **Gemieteter Server in Deutschland (empfohlen, unabhängig vom eigenen Internetanschluss):**
+  [docs/Server-Anleitung.md](docs/Server-Anleitung.md) mit Installationsskript
+  `deploy/server/install.sh` (App, HTTPS, Firewall, Updates, Datensicherung)
 - **Raspberry Pi + Synology-NAS ohne Docker (z. B. DS218j):** [docs/Raspberry-Pi-Anleitung.md](docs/Raspberry-Pi-Anleitung.md)
   mit Installationsskript `deploy/raspberry-pi/install.sh`
 - **NAS mit Docker/Container Manager:** [docs/NAS-Anleitung.md](docs/NAS-Anleitung.md),

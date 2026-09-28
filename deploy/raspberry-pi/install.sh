@@ -97,6 +97,7 @@ TZ=Europe/Berlin
 KITA_CODE=$kita
 ADMIN_CODE=$admin
 TRUST_PROXY=$nas
+HOST=${LISTEN_HOST:-}
 EOF
   chmod 600 "$ENV_FILE"
 else
@@ -162,6 +163,9 @@ if [ -z "$ok" ]; then
   journalctl -u $SERVICE -n 20 --no-pager || true
   fail "Die App ist nicht gestartet. Die Meldungen oben zeigen den Grund."
 fi
+
+# Beim Server-Skript (deploy/server/install.sh) folgt dessen eigene Zusammenfassung
+[ -z "${KITA_SERVER_MODE:-}" ] || exit 0
 
 ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 say "✅ Fertig! Die Kita-App läuft."
