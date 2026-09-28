@@ -325,12 +325,15 @@ function serveStatic(req, res) {
 
 // Absender-Adresse. Hinter einem Reverse Proxy (z. B. auf der NAS) kommen alle Anfragen
 // vom Proxy; die echte Adresse hängt dieser hinten an X-Forwarded-For an.
+// trustProxy: true = jedem Absender glauben (App nur lokal erreichbar, z. B. Docker),
+// oder die IP-Adresse des Proxys = nur Anfragen von dort glauben (z. B. NAS → Raspberry Pi).
 function clientIp(req, trustProxy) {
-  if (trustProxy) {
+  const remote = String(req.socket.remoteAddress || 'unbekannt').replace(/^::ffff:/, '');
+  if (trustProxy === true || (typeof trustProxy === 'string' && trustProxy === remote)) {
     const xff = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
     if (xff.length) return xff[xff.length - 1];
   }
-  return req.socket.remoteAddress || 'unbekannt';
+  return remote;
 }
 
 // Nach zu vielen falschen Codes wird eine Adresse eine Weile gesperrt,
@@ -682,7 +685,8 @@ if (require.main === module) {
     parentCode: process.env.KITA_CODE || 'kita',
     adminCode: process.env.ADMIN_CODE || 'leitung',
     dataFile: process.env.DATA_FILE || path.join(__dirname, 'data.json'),
-    trustProxy: process.env.TRUST_PROXY === '1',
+    // "1" = allen glauben (Docker, nur lokal erreichbar); sonst die IP-Adresse des Proxys
+    trustProxy: process.env.TRUST_PROXY === '1' ? true : process.env.TRUST_PROXY || false,
   });
   if (problems.length) {
     console.warn('Achtung (nur zum Testen in Ordnung):\n- ' + problems.join('\n- '));

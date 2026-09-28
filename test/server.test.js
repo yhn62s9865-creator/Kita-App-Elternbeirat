@@ -257,3 +257,21 @@ test('Unsichere Codes werden erkannt', () => {
   assert.ok(codeProblems('gleicher-code-123', 'gleicher-code-123').some((p) => /verschieden/.test(p)));
   assert.deepStrictEqual(codeProblems('sonnenschein', 'Elternbeirat-2026-geheim'), []);
 });
+
+test('X-Forwarded-For zählt nur, wenn die Anfrage vom eingetragenen Proxy kommt', async (t) => {
+  // Anfragen im Test kommen von 127.0.0.1 – als Proxy ist aber eine andere Adresse eingetragen
+  const { server, call } = await startServer({ trustProxy: '192.168.178.20' });
+  t.after(() => server.close());
+  // Wer die Kopfzeile fälscht, umgeht die Sperre nicht: alle Versuche zählen für 127.0.0.1
+  for (let i = 0; i < 10; i++) {
+    await call('POST', '/api/login', { headers: { 'X-Kita-Code': 'falsch', 'X-Forwarded-For': `10.0.0.${i}` } });
+  }
+  assert.strictEqual((await call('POST', '/api/login', { headers: { ...P, 'X-Forwarded-For': '10.0.0.99' } })).status, 429);
+
+  const viaProxy = await startServer({ trustProxy: '127.0.0.1' });
+  t.after(() => viaProxy.server.close());
+  for (let i = 0; i < 10; i++) {
+    await viaProxy.call('POST', '/api/login', { headers: { 'X-Kita-Code': 'falsch', 'X-Forwarded-For': '5.5.5.5' } });
+  }
+  assert.strictEqual((await viaProxy.call('POST', '/api/login', { headers: { ...P, 'X-Forwarded-For': '6.6.6.6' } })).status, 200);
+});

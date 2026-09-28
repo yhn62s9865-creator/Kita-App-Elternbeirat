@@ -1,6 +1,11 @@
 # Kita-App auf der eigenen NAS – von überall erreichbar
 
-Diese Anleitung ist für eine **Synology-NAS mit DSM 7.2** geschrieben. Bei anderen Geräten
+> **Hast du eine NAS ohne Docker (z. B. Synology DS218j oder andere „j“-Modelle)?**
+> Dann nimm die [Anleitung mit Raspberry Pi](Raspberry-Pi-Anleitung.md): Die App läuft auf
+> dem Pi, die NAS übernimmt Adresse und Verschlüsselung.
+
+Diese Anleitung ist für eine **Synology-NAS mit DSM 7.2 und Container Manager** geschrieben
+(z. B. „plus“-Modelle). Bei anderen Geräten
 (QNAP, UGREEN, Unraid …) funktioniert es nach dem gleichen Prinzip, nur die Menüs heißen
 anders. Je nach DSM-Version können einzelne Menüpunkte leicht abweichen.
 

@@ -38,8 +38,11 @@ Anmeldeschluss wieder austragen.
 Das geht gut: Die App ist ein einziges kleines Programm und speichert alles in **einer
 Datei** (`data.json`). Sie braucht keine Datenbank und schickt keine Daten an fremde Dienste.
 
-👉 **Schritt-für-Schritt-Anleitung für die NAS (inkl. Erreichbarkeit von außen und
-Einladungstext für Probeeltern): [docs/NAS-Anleitung.md](docs/NAS-Anleitung.md)**
+👉 **Schritt-für-Schritt-Anleitungen (inkl. Erreichbarkeit von außen):**
+- **Raspberry Pi + Synology-NAS ohne Docker (z. B. DS218j):** [docs/Raspberry-Pi-Anleitung.md](docs/Raspberry-Pi-Anleitung.md)
+  mit Installationsskript `deploy/raspberry-pi/install.sh`
+- **NAS mit Docker/Container Manager:** [docs/NAS-Anleitung.md](docs/NAS-Anleitung.md),
+  dort auch ein Einladungstext für Probeeltern
 
 ### Variante A: mit Docker (empfohlen, z. B. auf einer Synology-/QNAP-NAS)
 
@@ -51,7 +54,7 @@ Einladungstext für Probeeltern): [docs/NAS-Anleitung.md](docs/NAS-Anleitung.md)
 
 ### Variante B: direkt mit Node.js
 
-Benötigt [Node.js](https://nodejs.org) ab Version 20, keine weiteren Pakete.
+Benötigt [Node.js](https://nodejs.org) ab Version 18, keine weiteren Pakete.
 
 ```bash
 KITA_CODE=sonnenschein ADMIN_CODE=ein-langer-geheimer-code npm start
