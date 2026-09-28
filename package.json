@@ -1,0 +1,15 @@
+{
+  "name": "kita-notbetreuung",
+  "version": "0.1.0",
+  "description": "An- und Abmeldung zur Kita-Notbetreuung bei Personalengpässen",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

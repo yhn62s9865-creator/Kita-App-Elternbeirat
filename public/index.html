@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kita-Notbetreuung</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Kita-Notbetreuung</h1>
+      <div class="muted">An- und Abmeldung bei Personalengpässen</div>
+    </div>
+    <button id="logout" class="secondary hidden">Abmelden</button>
+  </header>
+
+  <section id="login" class="card hidden">
+    <h2>Willkommen</h2>
+    <p class="muted">Den Kita-Code bekommst du von der Kita-Leitung oder dem Elternbeirat.</p>
+    <form id="loginForm">
+      <label for="code">Kita-Code</label>
+      <input id="code" autocomplete="current-password" type="password" required>
+      <div class="row"><button type="submit">Weiter</button></div>
+      <div class="error" id="loginError"></div>
+    </form>
+  </section>
+
+  <section id="app" class="hidden">
+    <div class="card">
+      <h2>Mein Kind</h2>
+      <p class="muted">Wird auf diesem Gerät gemerkt, damit du es nicht jedes Mal eintippen musst.</p>
+      <div class="row">
+        <div><label for="child">Vorname (ggf. Initial)</label><input id="child" placeholder="z. B. Mia S."></div>
+        <div><label for="group">Gruppe</label><input id="group" placeholder="z. B. Bärengruppe"></div>
+      </div>
+    </div>
+    <div id="days"></div>
+  </section>
+</main>
+
+<script src="common.js"></script>
+<script>
+  const $ = (s) => document.querySelector(s);
+  let code = storageGet('kitaCode', '');
+  let myTokens = storageGet('myTokens', []);
+  const headers = () => ({ 'X-Kita-Code': code });
+
+  $('#child').value = storageGet('child', '');
+  $('#group').value = storageGet('group', '');
+  $('#child').addEventListener('input', (e) => storageSet('child', e.target.value));
+  $('#group').addEventListener('input', (e) => storageSet('group', e.target.value));
+
+  function show(loggedIn) {
+    $('#login').classList.toggle('hidden', loggedIn);
+    $('#app').classList.toggle('hidden', !loggedIn);
+    $('#logout').classList.toggle('hidden', !loggedIn);
+  }
+
+  $('#loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    code = $('#code').value.trim();
+    try {
+      await api('POST', '/api/login', {}, headers());
+      storageSet('kitaCode', code);
+      show(true);
+      load();
+    } catch (err) {
+      $('#loginError').textContent = err.message;
+    }
+  });
+
+  $('#logout').addEventListener('click', () => {
+    storageSet('kitaCode', '');
+    code = '';
+    show(false);
+  });
+
+  async function load() {
+    let days, mine;
+    try {
+      [days, mine] = await Promise.all([
+        api('GET', '/api/days', undefined, headers()),
+        api('POST', '/api/my-entries', { tokens: myTokens }, headers()),
+      ]);
+    } catch (err) {
+      if (/Code/.test(err.message)) { show(false); return; }
+      $('#days').innerHTML = `<div class="card error">${esc(err.message)}</div>`;
+      return;
+    }
+    // Tokens von gelöschten Einträgen/Tagen aufräumen
+    myTokens = mine.map((e) => e.editToken);
+    storageSet('myTokens', myTokens);
+
+    if (!days.length) {
+      $('#days').innerHTML = '<div class="card"><h2>Alles gut 🎉</h2><p class="muted">Aktuell sind keine Engpass-Tage gemeldet. Die Betreuung läuft normal.</p></div>';
+      return;
+    }
+    $('#days').innerHTML = days.map((d) => dayCard(d, mine.filter((e) => e.dayId === d.id))).join('');
+  }
+
+  function dayCard(d, mine) {
+    const free = Math.max(0, d.slots - d.confirmed);
+    const pct = d.slots ? Math.min(100, Math.round((d.confirmed / d.slots) * 100)) : 100;
+    return `
+      <div class="card">
+        <h2>${esc(formatDate(d.date))}</h2>
+        ${d.note ? `<div class="note">${esc(d.note)}</div>` : ''}
+        <div class="bar"><div style="width:${pct}%"></div></div>
+        <div class="stats">
+          <span class="badge confirmed">${d.confirmed} / ${d.slots} Plätze belegt</span>
+          ${d.waitlist ? `<span class="badge waitlist">${d.waitlist} auf Warteliste</span>` : ''}
+          <span class="badge home">${d.home} bleiben zuhause</span>
+        </div>
+        <div class="muted">
+          ${d.closed ? 'Anmeldung geschlossen.' : d.deadline ? `Anmeldeschluss: ${esc(formatDateTime(d.deadline))}` : ''}
+        </div>
+        ${mine.length ? `<ul class="mine">${mine.map((e) => `
+          <li>
+            <span><strong>${esc(e.child)}</strong>${e.group ? ` (${esc(e.group)})` : ''}
+              <span class="badge ${e.status}">${STATUS_LABEL[e.status]}</span></span>
+            ${d.closed ? '' : `<button class="danger" onclick="removeEntry('${e.id}','${e.editToken}')">Zurückziehen</button>`}
+          </li>`).join('')}</ul>` : ''}
+        ${d.closed ? '' : `
+          <div class="row">
+            <button onclick="addEntry('${d.id}','need')">Brauche Betreuung${free ? '' : ' (Warteliste)'}</button>
+            <button class="secondary" onclick="addEntry('${d.id}','home')">Kind bleibt zuhause</button>
+          </div>`}
+        <div class="error" id="err-${d.id}"></div>
+      </div>`;
+  }
+
+  async function addEntry(dayId, type) {
+    const child = $('#child').value.trim();
+    const group = $('#group').value.trim();
+    const errEl = $('#err-' + dayId);
+    if (!child) { errEl.textContent = 'Bitte oben den Namen des Kindes eintragen.'; $('#child').focus(); return; }
+    try {
+      const res = await api('POST', `/api/days/${dayId}/entries`, { child, group, type }, headers());
+      myTokens.push(res.editToken);
+      storageSet('myTokens', myTokens);
+      load();
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
+  }
+
+  async function removeEntry(entryId, editToken) {
+    if (!confirm('Eintrag wirklich zurückziehen?')) return;
+    try {
+      await api('DELETE', `/api/entries/${entryId}`, undefined, { ...headers(), 'X-Edit-Token': editToken });
+    } catch (err) {
+      alert(err.message);
+    }
+    load();
+  }
+
+  if (code) { show(true); load(); } else { show(false); }
+  setInterval(() => { if (code && !document.hidden) load(); }, 30000);
+</script>
+</body>
+</html>

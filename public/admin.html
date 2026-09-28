@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kita-Notbetreuung – Verwaltung</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Verwaltung</h1>
+      <div class="muted">Kita-Leitung &amp; Elternbeirat</div>
+    </div>
+    <button id="logout" class="secondary hidden">Abmelden</button>
+  </header>
+
+  <section id="login" class="card hidden">
+    <form id="loginForm">
+      <label for="code">Admin-Code</label>
+      <input id="code" type="password" autocomplete="current-password" required>
+      <div class="row"><button type="submit">Anmelden</button></div>
+      <div class="error" id="loginError"></div>
+    </form>
+  </section>
+
+  <section id="app" class="hidden">
+    <form id="newDay" class="card">
+      <h2>Engpass-Tag melden</h2>
+      <div class="row">
+        <div><label for="date">Datum</label><input id="date" type="date" required></div>
+        <div><label for="slots">Verfügbare Plätze</label><input id="slots" type="number" min="0" max="500" required></div>
+      </div>
+      <label for="deadline">Anmeldeschluss (optional)</label>
+      <input id="deadline" type="datetime-local">
+      <label for="note">Hinweis an die Eltern (optional)</label>
+      <textarea id="note" rows="2" placeholder="z. B. Wegen Krankheit sind nur 3 Erzieherinnen da. Bitte nur anmelden, wenn es wirklich nicht anders geht."></textarea>
+      <div class="row"><button type="submit">Tag anlegen</button></div>
+      <div class="error" id="newDayError"></div>
+    </form>
+    <div id="days"></div>
+  </section>
+</main>
+
+<script src="common.js"></script>
+<script>
+  const $ = (s) => document.querySelector(s);
+  let code = storageGet('adminCode', '');
+  const headers = () => ({ 'X-Admin-Code': code });
+  let loaded = {};
+
+  function show(loggedIn) {
+    $('#login').classList.toggle('hidden', loggedIn);
+    $('#app').classList.toggle('hidden', !loggedIn);
+    $('#logout').classList.toggle('hidden', !loggedIn);
+  }
+
+  $('#loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    code = $('#code').value.trim();
+    try {
+      await api('POST', '/api/admin/login', {}, headers());
+      storageSet('adminCode', code);
+      show(true);
+      load();
+    } catch (err) {
+      $('#loginError').textContent = err.message;
+    }
+  });
+
+  $('#logout').addEventListener('click', () => { storageSet('adminCode', ''); code = ''; show(false); });
+
+  $('#newDay').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#newDayError').textContent = '';
+    try {
+      await api('POST', '/api/admin/days', {
+        date: $('#date').value,
+        slots: Number($('#slots').value),
+        deadline: $('#deadline').value ? new Date($('#deadline').value).toISOString() : null,
+        note: $('#note').value,
+      }, headers());
+      e.target.reset();
+      load();
+    } catch (err) {
+      $('#newDayError').textContent = err.message;
+    }
+  });
+
+  async function load() {
+    let days;
+    try {
+      days = await api('GET', '/api/admin/days', undefined, headers());
+    } catch (err) {
+      show(false);
+      return;
+    }
+    const lists = await Promise.all(days.map((d) => api('GET', `/api/admin/days/${d.id}/entries`, undefined, headers())));
+    loaded = Object.fromEntries(days.map((d, i) => [d.id, { date: d.date, entries: lists[i] }]));
+    $('#days').innerHTML = days.length
+      ? days.map((d, i) => dayCard(d, lists[i])).join('')
+      : '<div class="card muted">Noch keine Engpass-Tage angelegt.</div>';
+  }
+
+  function dayCard(d, entries) {
+    return `
+      <div class="card">
+        <h2>${esc(formatDate(d.date))}</h2>
+        ${d.note ? `<div class="note">${esc(d.note)}</div>` : ''}
+        <div class="stats">
+          <span class="badge confirmed">${d.confirmed} / ${d.slots} Plätze</span>
+          <span class="badge waitlist">${d.waitlist} Warteliste</span>
+          <span class="badge home">${d.home} zuhause</span>
+        </div>
+        <div class="muted">${d.closed ? 'Anmeldung geschlossen' : 'Anmeldung offen'}${d.deadline ? ` · Schluss ${esc(formatDateTime(d.deadline))}` : ''}</div>
+        ${entries.length ? `
+          <table>
+            <thead><tr><th>#</th><th>Kind</th><th>Gruppe</th><th>Status</th></tr></thead>
+            <tbody>${entries.map((e, n) => `
+              <tr><td>${n + 1}</td><td>${esc(e.child)}</td><td>${esc(e.group)}</td>
+              <td><span class="badge ${e.status}">${STATUS_LABEL[e.status]}</span></td></tr>`).join('')}
+            </tbody>
+          </table>` : '<p class="muted">Noch keine Rückmeldungen.</p>'}
+        <div class="row">
+          <button class="secondary" onclick="changeSlots('${d.id}', ${d.slots})">Plätze ändern</button>
+          <button class="secondary" onclick="toggleClosed('${d.id}', ${d.manuallyClosed})">${d.manuallyClosed ? 'Wieder öffnen' : 'Anmeldung schließen'}</button>
+          <button class="secondary" onclick="exportCsv('${d.id}')">CSV-Liste</button>
+          <button class="danger" onclick="deleteDay('${d.id}')">Löschen</button>
+        </div>
+      </div>`;
+  }
+
+  async function changeSlots(id, current) {
+    const v = prompt('Wie viele Plätze gibt es?', current);
+    if (v === null) return;
+    try { await api('PATCH', `/api/admin/days/${id}`, { slots: Number(v) }, headers()); } catch (err) { alert(err.message); }
+    load();
+  }
+
+  async function toggleClosed(id, closed) {
+    try { await api('PATCH', `/api/admin/days/${id}`, { closed: !closed }, headers()); } catch (err) { alert(err.message); }
+    load();
+  }
+
+  async function deleteDay(id) {
+    if (!confirm('Tag inklusive aller Rückmeldungen löschen?')) return;
+    try { await api('DELETE', `/api/admin/days/${id}`, undefined, headers()); } catch (err) { alert(err.message); }
+    load();
+  }
+
+  function exportCsv(id) {
+    const { date, entries } = loaded[id];
+    const q = (s) => `"${String(s).replace(/"/g, '""')}"`;
+    const rows = [['Nr', 'Kind', 'Gruppe', 'Status'], ...entries.map((e, i) => [i + 1, e.child, e.group, STATUS_LABEL[e.status]])];
+    const blob = new Blob(['﻿' + rows.map((r) => r.map(q).join(';')).join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `notbetreuung-${date}.csv`;
+    a.click();
+  }
+
+  if (code) { show(true); load(); } else { show(false); }
+  setInterval(() => { if (code && !document.hidden) load(); }, 30000);
+</script>
+</body>
+</html>
