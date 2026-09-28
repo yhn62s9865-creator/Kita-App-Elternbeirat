@@ -210,3 +210,50 @@ test('Anmeldeschluss in der Vergangenheit wird abgelehnt, Wieder öffnen hebt ab
   const removed = await call('PATCH', `/api/admin/days/${day.body.id}`, { headers: A, body: { deadline: null } });
   assert.strictEqual(removed.body.deadline, null);
 });
+
+test('Sperre nach zu vielen falschen Codes, pro Absender', async (t) => {
+  const { server, call } = await startServer({ trustProxy: true });
+  t.after(() => server.close());
+  const from = (ip, code = 'falsch') => ({ 'X-Kita-Code': code, 'X-Forwarded-For': `1.2.3.4, ${ip}` });
+
+  for (let i = 0; i < 10; i++) {
+    assert.strictEqual((await call('POST', '/api/login', { headers: from('9.9.9.9') })).status, 401);
+  }
+  // Jetzt gesperrt – auch mit richtigem Code
+  const blocked = await call('POST', '/api/login', { headers: from('9.9.9.9', 'eltern') });
+  assert.strictEqual(blocked.status, 429);
+  assert.match(blocked.body.error, /Zu viele/);
+  // Andere Eltern sind nicht betroffen (die vorderste, fälschbare Adresse zählt nicht)
+  assert.strictEqual((await call('POST', '/api/login', { headers: from('8.8.8.8', 'eltern') })).status, 200);
+  // Admin-Versuche zählen ebenfalls
+  for (let i = 0; i < 10; i++) {
+    await call('GET', '/api/admin/days', { headers: { 'X-Admin-Code': 'rate', 'X-Forwarded-For': '7.7.7.7' } });
+  }
+  assert.strictEqual((await call('GET', '/api/admin/days', { headers: { ...A, 'X-Forwarded-For': '7.7.7.7' } })).status, 429);
+});
+
+test('Sicherheits-Header und kaputte Adressen', async (t) => {
+  const { server } = await startServer();
+  t.after(() => server.close());
+  const base = `http://localhost:${server.address().port}`;
+
+  const page = await fetch(base + '/');
+  assert.strictEqual(page.status, 200);
+  assert.strictEqual(page.headers.get('x-frame-options'), 'DENY');
+  assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+
+  // Darf den Server nicht abstürzen lassen
+  assert.strictEqual((await fetch(base + '/%E0%A4%A')).status, 400);
+  assert.strictEqual((await fetch(base + '/../server.js')).status, 404);
+  assert.strictEqual((await fetch(base + '/')).status, 200);
+});
+
+test('Unsichere Codes werden erkannt', () => {
+  const { codeProblems } = require('../server');
+  assert.ok(codeProblems(undefined, undefined).length >= 2);
+  assert.ok(codeProblems('kita', 'leitung').length >= 2);
+  assert.ok(codeProblems('hier-kita-code-eintragen', 'hier-langen-admin-code-eintragen').length >= 2);
+  assert.ok(codeProblems('abc', 'kurz').length >= 2);
+  assert.ok(codeProblems('gleicher-code-123', 'gleicher-code-123').some((p) => /verschieden/.test(p)));
+  assert.deepStrictEqual(codeProblems('sonnenschein', 'Elternbeirat-2026-geheim'), []);
+});

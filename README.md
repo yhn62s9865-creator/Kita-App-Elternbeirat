@@ -38,6 +38,9 @@ Anmeldeschluss wieder austragen.
 Das geht gut: Die App ist ein einziges kleines Programm und speichert alles in **einer
 Datei** (`data.json`). Sie braucht keine Datenbank und schickt keine Daten an fremde Dienste.
 
+👉 **Schritt-für-Schritt-Anleitung für die NAS (inkl. Erreichbarkeit von außen und
+Einladungstext für Probeeltern): [docs/NAS-Anleitung.md](docs/NAS-Anleitung.md)**
+
 ### Variante A: mit Docker (empfohlen, z. B. auf einer Synology-/QNAP-NAS)
 
 1. Projektordner auf den Server kopieren.
@@ -71,6 +74,18 @@ Dafür braucht der Server:
 Das am besten mit der IT des Trägers absprechen. Oft verwaltet sie das Kita-Netz und hat
 schon einen passenden Server. Ist das zu aufwendig, ist ein kleiner gemieteter Server bei
 einem deutschen Anbieter die Alternative. Die App läuft dort genauso.
+
+## Sicherheit
+
+- Nach 10 falschen Codes wird ein Gerät für 15 Minuten gesperrt, damit niemand die Codes
+  durchprobieren kann. Sperren erscheinen im Protokoll.
+- Im Echtbetrieb (Docker) startet die App nicht mit Beispiel- oder zu kurzen Codes.
+- Schutz gegen das Einbetten in fremde Seiten und gegen nachgeladene fremde Skripte
+  (Sicherheits-Header).
+- Die App selbst ist nur auf der NAS erreichbar; von außen geht es ausschließlich über den
+  Reverse Proxy mit HTTPS.
+- Der gemeinsame Kita-Code ist für einen Probelauf in Ordnung. Für den Dauerbetrieb wären
+  eigene Zugänge pro Familie sicherer (z. B. Einladungslinks), siehe Ausbaustufen.
 
 ## Datenschutz (DSGVO)
 

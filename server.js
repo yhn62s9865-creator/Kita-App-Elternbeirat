@@ -119,8 +119,13 @@ function publicEntry(e) {
   return { id: e.id, dayId: e.dayId, child: e.child, group: e.group, type: e.type, status: e.status };
 }
 
+// Kalendertag in Deutschland (sonst wäre zwischen 0 und 2 Uhr noch „gestern“)
+function berlinDate(now) {
+  return now.toLocaleDateString('sv-SE', { timeZone: 'Europe/Berlin' });
+}
+
 function upcomingDays(data, now = new Date()) {
-  const today = now.toISOString().slice(0, 10);
+  const today = berlinDate(now);
   return data.days.filter((d) => d.date >= today).sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -263,6 +268,17 @@ function sendXlsx(res, file) {
   res.end(file.buffer);
 }
 
+// Schutz gegen Einbetten in fremde Seiten, nachgeladene fremde Skripte usw.
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'Content-Security-Policy':
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+    "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+};
+
 function send(res, status, body) {
   res.writeHead(status, { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(body));
@@ -289,7 +305,13 @@ function safeEqual(a, b) {
 }
 
 function serveStatic(req, res) {
-  let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  let p;
+  try {
+    p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('Ungültige Adresse');
+  }
   if (p === '/') p = '/index.html';
   if (p === '/admin') p = '/admin.html';
   const file = path.join(PUBLIC_DIR, path.normalize(p));
@@ -301,22 +323,56 @@ function serveStatic(req, res) {
   fs.createReadStream(file).pipe(res);
 }
 
-function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) {
+// Absender-Adresse. Hinter einem Reverse Proxy (z. B. auf der NAS) kommen alle Anfragen
+// vom Proxy; die echte Adresse hängt dieser hinten an X-Forwarded-For an.
+function clientIp(req, trustProxy) {
+  if (trustProxy) {
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (xff.length) return xff[xff.length - 1];
+  }
+  return req.socket.remoteAddress || 'unbekannt';
+}
+
+// Nach zu vielen falschen Codes wird eine Adresse eine Weile gesperrt,
+// damit niemand die Codes einfach durchprobieren kann.
+function createLoginGuard({ maxFails = 10, windowMs = 15 * 60 * 1000, now }) {
+  const fails = new Map(); // ip -> { count, since }
+  return {
+    check(ip) {
+      const f = fails.get(ip);
+      if (f && now() - f.since > windowMs) fails.delete(ip);
+      else if (f && f.count >= maxFails) {
+        throw new HttpError(429, 'Zu viele falsche Versuche. Bitte in 15 Minuten erneut probieren.');
+      }
+    },
+    fail(ip) {
+      const f = fails.get(ip);
+      if (!f || now() - f.since > windowMs) fails.set(ip, { count: 1, since: now() });
+      else if (++f.count === maxFails) {
+        console.warn(`${new Date().toISOString()} Zu viele falsche Codes von ${ip} – für 15 Minuten gesperrt.`);
+      }
+      if (fails.size > 10000) fails.clear(); // Speicher begrenzen
+    },
+  };
+}
+
+function createApp({ parentCode, adminCode, dataFile, trustProxy = false, now = () => new Date() }) {
   if (!parentCode || !adminCode) throw new Error('parentCode und adminCode müssen gesetzt sein');
   const store = createStore(dataFile);
   const { data } = store;
+  const guard = createLoginGuard({ now: () => now().getTime() });
 
-  const requireParent = (req) => {
-    const code = req.headers['x-kita-code'] || '';
-    if (!safeEqual(code, parentCode) && !safeEqual(code, adminCode)) {
-      throw new HttpError(401, 'Falscher Kita-Code');
+  const checkCode = (req, header, allowed, message) => {
+    const ip = clientIp(req, trustProxy);
+    guard.check(ip);
+    const code = req.headers[header] || '';
+    if (!allowed.some((c) => safeEqual(code, c))) {
+      guard.fail(ip);
+      throw new HttpError(401, message);
     }
   };
-  const requireAdmin = (req) => {
-    if (!safeEqual(req.headers['x-admin-code'] || '', adminCode)) {
-      throw new HttpError(401, 'Falscher Admin-Code');
-    }
-  };
+  const requireParent = (req) => checkCode(req, 'x-kita-code', [parentCode, adminCode], 'Falscher Kita-Code');
+  const requireAdmin = (req) => checkCode(req, 'x-admin-code', [adminCode], 'Falscher Admin-Code');
   const findList = (listId) => {
     const list = data.lists.find((l) => l.id === listId);
     if (!list) throw new HttpError(404, 'Liste nicht gefunden');
@@ -386,7 +442,7 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
 
     ['GET', /^\/api\/lists$/, (req) => {
       requireParent(req);
-      const today = now().toISOString().slice(0, 10);
+      const today = berlinDate(now());
       return sortLists(data.lists.filter((l) => !l.date || l.date >= today)).map((l) => listSummary(data, l, now()));
     }],
     ['POST', /^\/api\/lists\/([\w-]+)\/signups$/, async (req, [listId]) => {
@@ -573,7 +629,13 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
   ];
 
   return async function handler(req, res) {
-    const { pathname } = new URL(req.url, 'http://x');
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
+    let pathname;
+    try {
+      ({ pathname } = new URL(req.url, 'http://x'));
+    } catch {
+      return send(res, 400, { error: 'Ungültige Adresse' });
+    }
     if (!pathname.startsWith('/api/')) return serveStatic(req, res);
     try {
       for (const [method, re, fn] of routes) {
@@ -592,17 +654,38 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
   };
 }
 
-module.exports = { createApp, entriesWithStatus, parseItems };
+module.exports = { createApp, entriesWithStatus, parseItems, codeProblems };
+
+// Gibt eine Liste von Problemen mit den Codes zurück (leer = alles gut).
+function codeProblems(parentCode, adminCode) {
+  const problems = [];
+  const weak = ['kita', 'leitung', 'hier-kita-code-eintragen', 'hier-langen-admin-code-eintragen'];
+  if (!parentCode || weak.includes(parentCode)) problems.push('KITA_CODE ist nicht gesetzt oder noch der Beispielwert.');
+  else if (parentCode.length < 6) problems.push('KITA_CODE sollte mindestens 6 Zeichen lang sein.');
+  if (!adminCode || weak.includes(adminCode)) problems.push('ADMIN_CODE ist nicht gesetzt oder noch der Beispielwert.');
+  else if (adminCode.length < 12) problems.push('ADMIN_CODE sollte mindestens 12 Zeichen lang sein.');
+  if (parentCode && parentCode === adminCode) problems.push('KITA_CODE und ADMIN_CODE müssen verschieden sein.');
+  return problems;
+}
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
+  const production = process.env.NODE_ENV === 'production';
+  const problems = codeProblems(process.env.KITA_CODE, process.env.ADMIN_CODE);
+  if (production && problems.length) {
+    // Im Echtbetrieb (z. B. Docker auf der NAS) lieber gar nicht starten als ungeschützt
+    console.error('Die App startet nicht, weil die Zugangscodes unsicher sind:\n- ' + problems.join('\n- '));
+    console.error('Bitte in docker-compose.yml eigene Codes eintragen und neu starten.');
+    process.exit(1);
+  }
   const handler = createApp({
     parentCode: process.env.KITA_CODE || 'kita',
     adminCode: process.env.ADMIN_CODE || 'leitung',
     dataFile: process.env.DATA_FILE || path.join(__dirname, 'data.json'),
+    trustProxy: process.env.TRUST_PROXY === '1',
   });
-  if (!process.env.KITA_CODE || !process.env.ADMIN_CODE) {
-    console.warn('Achtung: Standard-Codes aktiv. Für den echten Einsatz KITA_CODE und ADMIN_CODE setzen!');
+  if (problems.length) {
+    console.warn('Achtung (nur zum Testen in Ordnung):\n- ' + problems.join('\n- '));
   }
   http.createServer(handler).listen(port, () => {
     console.log(`Kita-App läuft auf http://localhost:${port}  (Verwaltung: /admin)`);

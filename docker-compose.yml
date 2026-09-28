@@ -1,13 +1,24 @@
-# Start:  docker compose up -d
-# Die Codes unbedingt ändern! Die Daten liegen im Ordner ./daten
+# Kita-App auf der NAS – Anleitung: docs/NAS-Anleitung.md
+#
+# 1. Die beiden Codes unten ändern (sonst startet die App absichtlich nicht):
+#    - KITA_CODE:  für alle Eltern, mindestens 6 Zeichen
+#    - ADMIN_CODE: nur für Kita-Leitung/Elternbeirat, mindestens 12 Zeichen
+# 2. Starten: im Container Manager als Projekt anlegen oder  docker compose up -d
+# 3. Die Daten liegen im Ordner ./daten – diesen Ordner regelmäßig sichern.
 services:
   kita-app:
     build: .
+    container_name: kita-app
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # Nur auf der NAS selbst erreichbar; von außen geht es über den
+      # Reverse Proxy mit HTTPS (siehe Anleitung).
+      - "127.0.0.1:3000:3000"
     environment:
       KITA_CODE: "hier-kita-code-eintragen"
       ADMIN_CODE: "hier-langen-admin-code-eintragen"
+      # Die App läuft hinter dem Reverse Proxy der NAS
+      TRUST_PROXY: "1"
+      TZ: "Europe/Berlin"
     volumes:
       - ./daten:/data
