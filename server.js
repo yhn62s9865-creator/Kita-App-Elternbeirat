@@ -88,6 +88,29 @@ function daySummary(data, day, now = new Date()) {
   };
 }
 
+// Anmeldeschluss prüfen: leer = keiner; in der Vergangenheit ist fast immer ein Versehen
+// (z. B. hat der Kalender-Knopf die aktuelle Uhrzeit eingetragen).
+function parseDeadline(value, now) {
+  if (value === undefined || value === null || value === '') return null;
+  if (isNaN(Date.parse(value))) throw new HttpError(400, 'Ungültiger Anmeldeschluss');
+  const d = new Date(value);
+  if (d <= now) {
+    throw new HttpError(400, 'Der Anmeldeschluss liegt in der Vergangenheit. Bitte eine spätere Zeit wählen oder das Feld leer lassen.');
+  }
+  return d.toISOString();
+}
+
+// Öffnen/Schließen und Anmeldeschluss ändern (für Engpass-Tage und Listen gleich).
+// Wer „Wieder öffnen“ drückt, will, dass Eltern sich eintragen können – ein bereits
+// abgelaufener Anmeldeschluss wird dabei entfernt.
+function applyOpenClose(target, body, now) {
+  if (body.deadline !== undefined) target.deadline = parseDeadline(body.deadline, now);
+  if (body.closed !== undefined) {
+    target.closed = Boolean(body.closed);
+    if (!target.closed && isPastDeadline(target, now)) target.deadline = null;
+  }
+}
+
 function isPastDeadline(day, now = new Date()) {
   return Boolean(day.deadline) && new Date(day.deadline) < now;
 }
@@ -432,13 +455,13 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
       const slots = Number(body.slots);
       if (!Number.isInteger(slots) || slots < 0 || slots > 500) throw new HttpError(400, 'Plätze müssen eine Zahl zwischen 0 und 500 sein');
       if (data.days.some((d) => d.date === body.date)) throw new HttpError(409, 'Für dieses Datum gibt es schon einen Eintrag');
-      if (body.deadline && isNaN(Date.parse(body.deadline))) throw new HttpError(400, 'Ungültiger Anmeldeschluss');
+      const deadline = parseDeadline(body.deadline, now());
       const day = {
         id: id(),
         date: body.date,
         slots,
         note: cleanText(body.note, 500),
-        deadline: body.deadline ? new Date(body.deadline).toISOString() : null,
+        deadline,
         closed: false,
         createdAt: now().toISOString(),
       };
@@ -455,7 +478,7 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
         if (!Number.isInteger(slots) || slots < 0 || slots > 500) throw new HttpError(400, 'Plätze müssen eine Zahl zwischen 0 und 500 sein');
         day.slots = slots;
       }
-      if (body.closed !== undefined) day.closed = Boolean(body.closed);
+      applyOpenClose(day, body, now());
       if (body.note !== undefined) day.note = cleanText(body.note, 500);
       store.save();
       return daySummary(data, day, now());
@@ -488,7 +511,7 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
       const title = cleanText(body.title, 100);
       if (!title) throw new HttpError(400, 'Bitte einen Titel angeben');
       if (body.date && !isoDate(body.date)) throw new HttpError(400, 'Ungültiges Datum');
-      if (body.deadline && isNaN(Date.parse(body.deadline))) throw new HttpError(400, 'Ungültiger Anmeldeschluss');
+      const deadline = parseDeadline(body.deadline, now());
       let items;
       if (body.kind === 'event') {
         const capacity = body.capacity === undefined || body.capacity === null || body.capacity === '' ? null : Number(body.capacity);
@@ -507,7 +530,7 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
         time: cleanText(body.time, 40),
         location: cleanText(body.location, 100),
         description: cleanText(body.description, 1000),
-        deadline: body.deadline ? new Date(body.deadline).toISOString() : null,
+        deadline,
         showNames: Boolean(body.showNames),
         closed: false,
         items: items.map((i) => ({ id: id(), ...i })),
@@ -521,7 +544,7 @@ function createApp({ parentCode, adminCode, dataFile, now = () => new Date() }) 
       requireAdmin(req);
       const list = findList(listId);
       const body = await readJson(req);
-      if (body.closed !== undefined) list.closed = Boolean(body.closed);
+      applyOpenClose(list, body, now());
       if (body.showNames !== undefined) list.showNames = Boolean(body.showNames);
       store.save();
       return listSummary(data, list, now(), { admin: true });

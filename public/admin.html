@@ -125,6 +125,38 @@
 
   const toIso = (v) => (v ? new Date(v).toISOString() : null);
 
+  // Im Kalender keine vergangenen Zeiten anbieten
+  function localNow() {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 16);
+  }
+  document.querySelectorAll('input[type=datetime-local]').forEach((el) => el.addEventListener('focus', () => { el.min = localNow(); }));
+  const today = localNow().slice(0, 10);
+  document.querySelectorAll('input[type=date]').forEach((el) => { el.min = today; });
+
+  // Zeigt klar an, ob und warum die Anmeldung geschlossen ist
+  function statusLine(x) {
+    if (!x.closed) {
+      return `<div class="muted">✅ Anmeldung offen${x.deadline ? ` bis ${esc(formatDateTime(x.deadline))}` : ' (kein Anmeldeschluss)'}</div>`;
+    }
+    const why = x.manuallyClosed ? 'von Hand geschlossen' : `Anmeldeschluss ${esc(formatDateTime(x.deadline))} ist vorbei`;
+    return `<div class="note">🔒 Anmeldung geschlossen (${why}). Eltern können sich nicht mehr eintragen. Mit „Wieder öffnen“ wieder freigeben.</div>`;
+  }
+
+  // Eingabe wie „30.09.2026 18:00“; leer = kein Anmeldeschluss
+  async function changeDeadline(kind, id) {
+    const v = prompt('Neuer Anmeldeschluss (z. B. 30.09.2026 18:00).\nLeer lassen = kein Anmeldeschluss.', '');
+    if (v === null) return;
+    let deadline = null;
+    if (v.trim()) {
+      const m = v.trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2})[:.](\d{2}))?$/);
+      if (!m) { alert('Bitte im Format TT.MM.JJJJ HH:MM eingeben, z. B. 30.09.2026 18:00'); return; }
+      deadline = new Date(+m[3], m[2] - 1, +m[1], m[4] ? +m[4] : 23, m[5] ? +m[5] : 59).toISOString();
+    }
+    patch(kind, id, { deadline });
+  }
+
   // ---------- Listen ----------
 
   $('#kind').addEventListener('change', (e) => {
@@ -178,11 +210,12 @@
           <span class="badge confirmed">${l.kind === 'event' ? `${total}${l.items[0].capacity ? ` / ${l.items[0].capacity}` : ''} Personen angemeldet` : `${total} Helfer eingetragen`}</span>
           <span class="badge home">${l.showNames ? 'Namen für Eltern sichtbar' : 'Namen nur hier sichtbar'}</span>
         </div>
-        <div class="muted">${l.closed ? 'Anmeldung geschlossen' : 'Anmeldung offen'}${l.deadline ? ` · Schluss ${esc(formatDateTime(l.deadline))}` : ''}</div>
+        ${statusLine(l)}
         ${total || l.kind === 'helper' ? `<table><thead>${head}</thead><tbody>${rows}</tbody></table>` : '<p class="muted">Noch keine Anmeldungen.</p>'}
         <div class="row">
           <button onclick="excel('lists','${l.id}')">⬇ Excel-Liste</button>
-          <button class="secondary" onclick="patch('lists','${l.id}',{closed:${!l.manuallyClosed}})">${l.manuallyClosed ? 'Wieder öffnen' : 'Anmeldung schließen'}</button>
+          <button class="secondary" onclick="patch('lists','${l.id}',{closed:${!l.closed}})">${l.closed ? 'Wieder öffnen' : 'Anmeldung schließen'}</button>
+          <button class="secondary" onclick="changeDeadline('lists','${l.id}')">Anmeldeschluss ändern</button>
           <button class="secondary" onclick="patch('lists','${l.id}',{showNames:${!l.showNames}})">${l.showNames ? 'Namen verbergen' : 'Namen zeigen'}</button>
           <button class="danger" onclick="remove('lists','${l.id}','Liste inklusive aller Einträge löschen?')">Löschen</button>
         </div>
@@ -225,7 +258,7 @@
           <span class="badge waitlist">${d.waitlist} Warteliste</span>
           <span class="badge home">${d.home} zuhause</span>
         </div>
-        <div class="muted">${d.closed ? 'Anmeldung geschlossen' : 'Anmeldung offen'}${d.deadline ? ` · Schluss ${esc(formatDateTime(d.deadline))}` : ''}</div>
+        ${statusLine(d)}
         ${entries.length ? `
           <table>
             <thead><tr><th>#</th><th>Kind</th><th>Gruppe</th><th>Status</th></tr></thead>
@@ -237,7 +270,8 @@
         <div class="row">
           <button onclick="excel('days','${d.id}')">⬇ Excel-Liste</button>
           <button class="secondary" onclick="changeSlots('${d.id}', ${d.slots})">Plätze ändern</button>
-          <button class="secondary" onclick="patch('days','${d.id}',{closed:${!d.manuallyClosed}})">${d.manuallyClosed ? 'Wieder öffnen' : 'Anmeldung schließen'}</button>
+          <button class="secondary" onclick="patch('days','${d.id}',{closed:${!d.closed}})">${d.closed ? 'Wieder öffnen' : 'Anmeldung schließen'}</button>
+          <button class="secondary" onclick="changeDeadline('days','${d.id}')">Anmeldeschluss ändern</button>
           <button class="danger" onclick="remove('days','${d.id}','Tag inklusive aller Rückmeldungen löschen?')">Löschen</button>
         </div>
       </div>`;

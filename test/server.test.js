@@ -181,3 +181,32 @@ test('Excel-Download ist eine gültige .xlsx-Datei', async (t) => {
   const dayRes = await fetch(`${base}/api/admin/days/${day.id}/excel`, { headers: A });
   assert.strictEqual(dayRes.status, 200);
 });
+
+test('Anmeldeschluss in der Vergangenheit wird abgelehnt, Wieder öffnen hebt abgelaufenen Schluss auf', async (t) => {
+  let now = new Date('2099-04-01T09:30:00Z');
+  const { server, call } = await startServer({ now: () => now });
+  t.after(() => server.close());
+
+  // Versehentlich die aktuelle Uhrzeit als Anmeldeschluss → verständliche Fehlermeldung
+  const past = await call('POST', '/api/admin/days', { headers: A, body: { date: '2099-04-02', slots: 10, deadline: '2099-04-01T09:11:00Z' } });
+  assert.strictEqual(past.status, 400);
+  assert.match(past.body.error, /Vergangenheit/);
+  const pastList = await call('POST', '/api/admin/lists', { headers: A, body: { kind: 'event', title: 'X', deadline: '2099-03-01T00:00:00Z' } });
+  assert.strictEqual(pastList.status, 400);
+
+  const day = await call('POST', '/api/admin/days', { headers: A, body: { date: '2099-04-02', slots: 10, deadline: '2099-04-01T12:00:00Z' } });
+  now = new Date('2099-04-01T13:00:00Z'); // Schluss ist vorbei
+  const url = `/api/days/${day.body.id}/entries`;
+  assert.strictEqual((await call('POST', url, { headers: P, body: { child: 'Paula', type: 'need' } })).status, 409);
+
+  const reopened = await call('PATCH', `/api/admin/days/${day.body.id}`, { headers: A, body: { closed: false } });
+  assert.strictEqual(reopened.body.closed, false);
+  assert.strictEqual(reopened.body.deadline, null);
+  assert.strictEqual((await call('POST', url, { headers: P, body: { child: 'Paula', type: 'need' } })).status, 200);
+
+  // Anmeldeschluss nachträglich setzen und wieder entfernen
+  const later = await call('PATCH', `/api/admin/days/${day.body.id}`, { headers: A, body: { deadline: '2099-04-01T20:00:00Z' } });
+  assert.strictEqual(later.body.deadline, '2099-04-01T20:00:00.000Z');
+  const removed = await call('PATCH', `/api/admin/days/${day.body.id}`, { headers: A, body: { deadline: null } });
+  assert.strictEqual(removed.body.deadline, null);
+});

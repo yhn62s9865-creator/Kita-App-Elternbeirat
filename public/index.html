@@ -126,10 +126,14 @@
       : '<div class="card"><h2>Alles gut 🎉</h2><p class="muted">Aktuell sind keine Engpass-Tage gemeldet. Die Betreuung läuft normal.</p></div>';
   }
 
+  function closedNote() {
+    return '<div class="note">🔒 Die Anmeldung ist geschlossen. Eintragen oder Austragen ist nicht mehr möglich – bei Fragen bitte direkt an die Kita wenden.</div>';
+  }
+
   // ---------- Termine & Listen ----------
 
   function listCard(l, mine) {
-    const status = l.closed ? 'Anmeldung geschlossen.' : l.deadline ? `Anmeldeschluss: ${esc(formatDateTime(l.deadline))}` : '';
+    const status = l.closed ? '' : l.deadline ? `Anmeldeschluss: ${esc(formatDateTime(l.deadline))}` : '';
     return `
       <div class="card">
         <div class="kind">${KIND_LABEL[l.kind]}</div>
@@ -137,7 +141,7 @@
         <div class="muted">${listMeta(l)}</div>
         ${l.description ? `<div class="desc">${esc(l.description)}</div>` : ''}
         ${l.kind === 'event' ? eventBody(l, mine) : l.items.map((i) => helperItem(l, i, mine.filter((s) => s.itemId === i.id))).join('')}
-        <div class="muted">${status}</div>
+        ${l.closed ? closedNote() : `<div class="muted">${status}</div>`}
         <div class="error" id="err-${l.id}"></div>
       </div>`;
   }
@@ -243,9 +247,7 @@
           ${d.waitlist ? `<span class="badge waitlist">${d.waitlist} auf Warteliste</span>` : ''}
           <span class="badge home">${d.home} bleiben zuhause</span>
         </div>
-        <div class="muted">
-          ${d.closed ? 'Anmeldung geschlossen.' : d.deadline ? `Anmeldeschluss: ${esc(formatDateTime(d.deadline))}` : ''}
-        </div>
+        ${d.closed ? closedNote() : d.deadline ? `<div class="muted">Anmeldeschluss: ${esc(formatDateTime(d.deadline))}</div>` : ''}
         ${mine.length ? `<ul class="mine">${mine.map((e) => `
           <li>
             <span><strong>${esc(e.child)}</strong>${e.group ? ` (${esc(e.group)})` : ''}
