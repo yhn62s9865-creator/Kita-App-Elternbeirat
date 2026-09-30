@@ -57,17 +57,32 @@ if ! command -v caddy >/dev/null; then
   say "Installiere Caddy (HTTPS) …"
   apt-get install -y -q caddy || fail "Caddy konnte nicht installiert werden."
 fi
-cat > "$CADDYFILE" <<EOF
-# Kita-App – Caddy holt und erneuert das HTTPS-Zertifikat automatisch
+# Nur den eigenen, markierten Abschnitt ersetzen – andere Apps auf demselben Server
+# (z. B. die Chor-App) behalten ihre Abschnitte.
+touch "$CADDYFILE"
+# Die Standard-Beispielseite von Caddy (Port 80) wird entfernt, sie würde sonst die Zertifikate stören.
+if grep -q '^:80 {' "$CADDYFILE" && ! grep -q 'reverse_proxy' "$CADDYFILE"; then
+  : > "$CADDYFILE"
+fi
+# Frühere Versionen dieses Skripts schrieben den Kita-Abschnitt ohne Markierung – diesen entfernen.
+if ! grep -q '^# >>> kita-app' "$CADDYFILE"; then
+  awk '/^# Kita-App – Caddy holt/ { skip = 1; next } skip && /^}/ { skip = 0; next } !skip' "$CADDYFILE" > "$CADDYFILE.neu"
+  cat "$CADDYFILE.neu" > "$CADDYFILE"
+  rm -f "$CADDYFILE.neu"
+fi
+sed -i '/^# >>> kita-app/,/^# <<< kita-app/d' "$CADDYFILE"
+cat >> "$CADDYFILE" <<EOF
+# >>> kita-app (wird vom Installationsskript der Kita-App verwaltet)
 $domain {
 	encode gzip
 	header Strict-Transport-Security "max-age=31536000"
 	reverse_proxy 127.0.0.1:3000
 }
+# <<< kita-app
 EOF
-caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1 || fail "Die Caddy-Konfiguration ist fehlerhaft."
+caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1 || fail "Die Caddy-Konfiguration ist fehlerhaft ($CADDYFILE)."
 systemctl enable caddy >/dev/null 2>&1
-systemctl restart caddy
+systemctl reload caddy 2>/dev/null || systemctl restart caddy
 
 # ---------- 4. Firewall: nur SSH, HTTP und HTTPS ----------
 say "Richte die Firewall ein …"

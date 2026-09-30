@@ -155,6 +155,13 @@ Alle Befehle nach `ssh root@<IP>`:
 
 Codes, Daten und Domain bleiben erhalten.
 
+### Weitere Apps auf demselben Server
+
+Der Server kann neben der Kita-App weitere Apps beherbergen, z. B. die **Soulfood Chor-App**. Jede App hat
+einen eigenen, markierten Abschnitt in der HTTPS-Konfiguration (`/etc/caddy/Caddyfile`); das Skript der
+Kita-App ersetzt nur seinen eigenen Abschnitt (`# >>> kita-app` … `# <<< kita-app`), die anderen Apps bleiben
+bei einem Update erreichbar.
+
 ### Datensicherung
 
 - Der Server sichert die Daten **jede Nacht** und hebt **30 Tage** auf.
